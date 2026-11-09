@@ -873,10 +873,30 @@ export async function fetchPublicCatalogApi(): Promise<SoundItem[]> {
   return getStoredCatalogItems().filter((it) => it.isPublished !== false);
 }
 
-export async function fetchAdminCatalogApi(token: string): Promise<SoundItem[]> {
+export async function checkAdminSessionApi(): Promise<{ authenticated: boolean }> {
   try {
+    const res = await fetch('/api/admin/session', {
+      credentials: 'same-origin'
+    });
+    if (res.ok) {
+      setAdminSession(true);
+      return { authenticated: true };
+    }
+  } catch {
+    // Network or server error
+  }
+  setAdminSession(false);
+  return { authenticated: false };
+}
+
+export async function fetchAdminCatalogApi(token?: string): Promise<SoundItem[]> {
+  try {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/api/admin/catalog', {
-      headers: { Authorization: `Bearer ${token}` }
+      credentials: 'same-origin',
+      headers
     });
     if (res.ok) {
       const data: SoundItem[] = await res.json();
@@ -889,18 +909,18 @@ export async function fetchAdminCatalogApi(token: string): Promise<SoundItem[]> 
   return getStoredCatalogItems();
 }
 
-export async function loginAdminApi(password: string, email?: string): Promise<{ success: boolean; token?: string; error?: string }> {
+export async function loginAdminApi(password: string, email?: string): Promise<{ success: boolean; error?: string }> {
   try {
     const res = await fetch('/api/admin/login', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password, email })
     });
     const data = await res.json();
-    if (res.ok && data.success && data.token) {
-      setAdminToken(data.token);
+    if (res.ok && data.success) {
       setAdminSession(true);
-      return { success: true, token: data.token };
+      return { success: true };
     }
     return { success: false, error: data.error || 'Credenciales incorrectas' };
   } catch (err: any) {
@@ -908,14 +928,28 @@ export async function loginAdminApi(password: string, email?: string): Promise<{
   }
 }
 
-export async function saveItemApi(item: Partial<SoundItem>, token: string): Promise<{ success: boolean; item?: SoundItem; error?: string }> {
+export async function logoutAdminApi(): Promise<void> {
   try {
+    await fetch('/api/admin/logout', {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+  } catch {
+    // Ignore network error on logout
+  }
+  setAdminSession(false);
+  setAdminToken(null);
+}
+
+export async function saveItemApi(item: Partial<SoundItem>, token?: string): Promise<{ success: boolean; item?: SoundItem; error?: string }> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/api/admin/items', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
+      credentials: 'same-origin',
+      headers,
       body: JSON.stringify(item)
     });
     const data = await res.json();
@@ -923,43 +957,21 @@ export async function saveItemApi(item: Partial<SoundItem>, token: string): Prom
       addCatalogItem(data.item);
       return { success: true, item: data.item };
     }
-  } catch (err) {
-    console.warn('Error saving to server, saving locally:', err);
+    return { success: false, error: data.error || 'Error al guardar elemento.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error de conexión.' };
   }
-
-  // Fallback to local
-  const newItem: SoundItem = {
-    id: item.id || `item_${Date.now()}`,
-    section: item.section || 'one_shots',
-    title: (item.title || 'UNNAMED').toUpperCase(),
-    category: item.category || 'Sound',
-    bpm: item.bpm,
-    key: item.key,
-    duration: item.duration || 2.0,
-    format: item.format || 'WAV 24-bit',
-    fileSize: item.fileSize || '12 MB',
-    coverImage: item.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
-    audioUrl: item.audioUrl,
-    syntheticType: item.syntheticType || 'synth',
-    isFree: item.isFree ?? true,
-    price: item.isFree ? 0 : (item.price || 19.99),
-    isPublished: item.isPublished !== false,
-    downloads: 0,
-    description: item.description,
-    createdAt: new Date().toISOString().split('T')[0]
-  };
-  addCatalogItem(newItem);
-  return { success: true, item: newItem };
 }
 
-export async function updateItemApi(id: string, patch: Partial<SoundItem>, token: string): Promise<{ success: boolean; item?: SoundItem }> {
+export async function updateItemApi(id: string, patch: Partial<SoundItem>, token?: string): Promise<{ success: boolean; item?: SoundItem; error?: string }> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch(`/api/admin/items/${id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
+      credentials: 'same-origin',
+      headers,
       body: JSON.stringify(patch)
     });
     const data = await res.json();
@@ -967,28 +979,21 @@ export async function updateItemApi(id: string, patch: Partial<SoundItem>, token
       updateCatalogItem(data.item);
       return { success: true, item: data.item };
     }
-  } catch (err) {
-    console.warn('Error updating on server, updating locally:', err);
+    return { success: false, error: data.error || 'Error al actualizar.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error de conexión.' };
   }
-
-  const current = getStoredCatalogItems();
-  const target = current.find((it) => it.id === id);
-  if (target) {
-    const updated = { ...target, ...patch, title: patch.title ? patch.title.toUpperCase() : target.title };
-    updateCatalogItem(updated);
-    return { success: true, item: updated };
-  }
-  return { success: false };
 }
 
-export async function togglePublishApi(id: string, isPublished: boolean, token: string): Promise<boolean> {
+export async function togglePublishApi(id: string, isPublished: boolean, token?: string): Promise<boolean> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch(`/api/admin/items/${id}/publish`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
+      credentials: 'same-origin',
+      headers,
       body: JSON.stringify({ isPublished })
     });
     if (res.ok) {
@@ -1003,11 +1008,15 @@ export async function togglePublishApi(id: string, isPublished: boolean, token: 
   return result ? result.isPublished : isPublished;
 }
 
-export async function deleteItemApi(id: string, token: string): Promise<boolean> {
+export async function deleteItemApi(id: string, token?: string): Promise<boolean> {
   try {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch(`/api/admin/items/${id}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` }
+      credentials: 'same-origin',
+      headers
     });
     if (res.ok) {
       deleteCatalogItem(id);
@@ -1020,14 +1029,15 @@ export async function deleteItemApi(id: string, token: string): Promise<boolean>
   return true;
 }
 
-export async function clearDemoItemsApi(section: string, token: string): Promise<boolean> {
+export async function clearDemoItemsApi(section: string, token?: string): Promise<boolean> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/api/admin/clear-demo-items', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
+      credentials: 'same-origin',
+      headers,
       body: JSON.stringify({ section })
     });
     if (res.ok) {
@@ -1045,18 +1055,19 @@ export async function clearDemoItemsApi(section: string, token: string): Promise
   return true;
 }
 
-export async function uploadFileApi(file: File, kind: 'audio' | 'cover', token: string): Promise<{ success: boolean; url?: string; error?: string }> {
+export async function uploadFileApi(file: File, kind: 'audio' | 'cover', token?: string): Promise<{ success: boolean; url?: string; storagePath?: string; error?: string }> {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         const base64 = (reader.result as string).split(',')[1];
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
         const res = await fetch('/api/admin/upload-file', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
+          credentials: 'same-origin',
+          headers,
           body: JSON.stringify({
             fileName: file.name,
             fileType: file.type,
@@ -1065,8 +1076,8 @@ export async function uploadFileApi(file: File, kind: 'audio' | 'cover', token: 
           })
         });
         const data = await res.json();
-        if (res.ok && data.url) {
-          resolve({ success: true, url: data.url });
+        if (res.ok) {
+          resolve({ success: true, url: data.url, storagePath: data.storagePath });
           return;
         }
         resolve({ success: false, error: data.error || 'Error al subir archivo' });

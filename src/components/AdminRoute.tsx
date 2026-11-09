@@ -22,13 +22,12 @@ import { CatalogSection, SoundItem } from '../types/sound';
 import {
   deleteAudioBlob,
   getAdminSession,
-  getAdminToken,
   getStorageUsage,
   getStoredCatalogItems,
   loginAdminApi,
+  logoutAdminApi,
+  checkAdminSessionApi,
   saveAudioBlob,
-  setAdminSession,
-  setAdminToken,
   deleteItemApi,
   clearDemoItemsApi,
   saveItemApi,
@@ -100,15 +99,22 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     samples: ['Melodic Synth Loop', 'Vocal Chop Texture', 'Analog Chords', 'Modular Sequence', 'Guitar Stem', 'Atmosphere']
   };
 
-  // Carga inicial y actualización de datos
+  // Carga inicial y verificación de sesión con el servidor
   useEffect(() => {
-    if (isAdmin) {
-      const token = getAdminToken() || 'anomaly_master_auth_2026_jwt_token';
-      fetchAdminCatalogApi(token).then((data) => {
-        setItems(data);
-      });
-      getStorageUsage().then(setStorageUsage);
-    }
+    checkAdminSessionApi().then((authStatus) => {
+      if (authStatus.authenticated) {
+        setIsAdmin(true);
+        fetchAdminCatalogApi().then((data) => {
+          setItems(data);
+        });
+        getStorageUsage().then(setStorageUsage);
+      } else if (isAdmin) {
+        fetchAdminCatalogApi().then((data) => {
+          setItems(data);
+        });
+        getStorageUsage().then(setStorageUsage);
+      }
+    });
   }, [isAdmin]);
 
   // Actualizar categorías por defecto al cambiar de sección
@@ -139,8 +145,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       const result = await loginAdminApi(adminPassword.trim(), adminEmail.trim());
       if (result.success) {
         setIsAdmin(true);
-        const token = result.token || 'anomaly_master_auth_2026_jwt_token';
-        const fresh = await fetchAdminCatalogApi(token);
+        const fresh = await fetchAdminCatalogApi();
         setItems(fresh);
       } else {
         setLoginError(result.error || 'Credenciales de administrador no válidas.');
@@ -152,10 +157,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     stopCurrentAudio();
-    setAdminSession(false);
-    setAdminToken(null);
+    await logoutAdminApi();
     setIsAdmin(false);
     setAdminPassword('');
   }
@@ -217,8 +221,6 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     setIsProcessing(true);
     setStatusFeedback(null);
 
-    const token = getAdminToken() || 'anomaly_master_auth_2026_jwt_token';
-
     try {
       let finalAudioUrl: string | undefined = undefined;
       let finalCoverUrl: string = coverPreviewUrl || (
@@ -247,7 +249,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         }
 
         // Subir al servidor persistente
-        const uploadRes = await uploadFileApi(selectedAudioFile, 'audio', token);
+        const uploadRes = await uploadFileApi(selectedAudioFile, 'audio');
         if (uploadRes.success && uploadRes.url) {
           finalAudioUrl = uploadRes.url;
         }
@@ -259,7 +261,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
       // 2. Si se adjuntó una portada opcional
       if (selectedCoverFile) {
-        const coverUploadRes = await uploadFileApi(selectedCoverFile, 'cover', token);
+        const coverUploadRes = await uploadFileApi(selectedCoverFile, 'cover');
         if (coverUploadRes.success && coverUploadRes.url) {
           finalCoverUrl = coverUploadRes.url;
         }
@@ -284,11 +286,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         description: description.trim()
       };
 
-      const res = await saveItemApi(newItemData, token);
+      const res = await saveItemApi(newItemData);
 
       if (res.success && res.item) {
         // Refrescar lista de items
-        const fresh = await fetchAdminCatalogApi(token);
+        const fresh = await fetchAdminCatalogApi();
         setItems(fresh);
         onCatalogUpdated();
 
@@ -324,12 +326,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     if (!editingItem) return;
 
     setIsProcessing(true);
-    const token = getAdminToken() || 'anomaly_master_auth_2026_jwt_token';
 
     try {
       let finalCoverUrl = editingItem.coverImage;
       if (selectedCoverFile) {
-        const coverRes = await uploadFileApi(selectedCoverFile, 'cover', token);
+        const coverRes = await uploadFileApi(selectedCoverFile, 'cover');
         if (coverRes.success && coverRes.url) {
           finalCoverUrl = coverRes.url;
         }
@@ -348,9 +349,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         isPublished: editingItem.isPublished
       };
 
-      await updateItemApi(editingItem.id, patch, token);
+      await updateItemApi(editingItem.id, patch);
 
-      const fresh = await fetchAdminCatalogApi(token);
+      const fresh = await fetchAdminCatalogApi();
       setItems(fresh);
       onCatalogUpdated();
       setEditingItem(null);
@@ -367,12 +368,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
   // Alternar publicación (Publicado <-> Borrador)
   async function handleTogglePublish(item: SoundItem) {
-    const token = getAdminToken() || 'anomaly_master_auth_2026_jwt_token';
     const newStatus = !item.isPublished;
 
     try {
-      await togglePublishApi(item.id, newStatus, token);
-      const fresh = await fetchAdminCatalogApi(token);
+      await togglePublishApi(item.id, newStatus);
+      const fresh = await fetchAdminCatalogApi();
       setItems(fresh);
       onCatalogUpdated();
 
@@ -398,14 +398,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   async function confirmDeleteItem() {
     if (!itemToDelete) return;
     setIsDeleting(true);
-    const token = getAdminToken() || 'anomaly_master_auth_2026_jwt_token';
     const targetTitle = itemToDelete.title;
 
     try {
-      await deleteItemApi(itemToDelete.id, token);
+      await deleteItemApi(itemToDelete.id);
       await deleteAudioBlob(itemToDelete.id);
 
-      const fresh = await fetchAdminCatalogApi(token);
+      const fresh = await fetchAdminCatalogApi();
       setItems(fresh);
       onCatalogUpdated();
       getStorageUsage().then(setStorageUsage);
@@ -429,12 +428,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   // Confirmar vaciado permanente de todos los elementos de la sección activa
   async function confirmClearSection() {
     setIsDeleting(true);
-    const token = getAdminToken() || 'anomaly_master_auth_2026_jwt_token';
 
     try {
-      await clearDemoItemsApi(activeSection, token);
+      await clearDemoItemsApi(activeSection);
 
-      const fresh = await fetchAdminCatalogApi(token);
+      const fresh = await fetchAdminCatalogApi();
       setItems(fresh);
       onCatalogUpdated();
       getStorageUsage().then(setStorageUsage);

@@ -5,6 +5,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import path from 'path';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -47,159 +48,204 @@ export interface SoundItemRecord {
   section: 'one_shots' | 'beats' | 'samples';
   title: string;
   category: string;
-  bpm?: number;
-  key?: string;
+  bpm?: number | null;
+  key?: string | null;
   duration: number;
   format: string;
   file_size: string;
-  cover_image: string;
-  audio_storage_path?: string;
-  audio_url?: string;
-  synthetic_type?: string;
+  cover_image?: string | null;
+  audio_storage_path?: string | null;
+  audio_url?: string | null;
+  synthetic_type?: string | null;
   is_free: boolean;
   price: number;
   is_published: boolean;
   downloads: number;
-  description?: string;
+  description?: string | null;
   created_at?: string;
   updated_at?: string;
 }
 
 export interface OrderRecord {
   order_id: string;
-  paypal_capture_id?: string;
+  paypal_capture_id?: string | null;
   item_id: string;
   item_title: string;
   amount: number;
   currency: string;
-  buyer_email?: string;
-  buyer_name?: string;
+  buyer_email?: string | null;
+  buyer_name?: string | null;
   status: 'CREATED' | 'COMPLETED' | 'FAILED' | 'REFUNDED';
   created_at?: string;
-  captured_at?: string;
+  captured_at?: string | null;
 }
 
 export interface DownloadTokenRecord {
   token: string;
   order_id: string;
   item_id: string;
-  buyer_email?: string;
+  buyer_email?: string | null;
   expires_at: string;
   download_count: number;
   max_downloads: number;
+  created_at?: string;
 }
 
 // -----------------------------------------------------------------------------
 // CATÁLOGO: CONSULTA Y PERSISTENCIA EN SUPABASE
 // -----------------------------------------------------------------------------
 
-export async function getSoundItemsFromSupabase(includeDrafts = false): Promise<SoundItemRecord[] | null> {
+export async function getSoundItemsFromSupabase(includeDrafts = false): Promise<SoundItemRecord[]> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return null;
-
-  try {
-    let query = supabase
-      .from('sound_items')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (!includeDrafts) {
-      query = query.eq('is_published', true);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.warn('Supabase query error on sound_items:', error.message);
-      return null;
-    }
-
-    return data as SoundItemRecord[];
-  } catch (err) {
-    console.error('Error fetching sound items from Supabase:', err);
-    return null;
+  if (!supabase) {
+    throw new Error('Supabase no está configurado (variables ausentes)');
   }
+
+  let query = supabase
+    .from('sound_items')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (!includeDrafts) {
+    query = query.eq('is_published', true);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('Supabase query error on sound_items:', error.message);
+    throw new Error(`Error en consulta de sound_items: ${error.message}`);
+  }
+
+  return (data || []) as SoundItemRecord[];
+}
+
+export async function getSoundItemByIdFromSupabase(id: string): Promise<SoundItemRecord | null> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    throw new Error('Supabase no está configurado');
+  }
+
+  const { data, error } = await supabase
+    .from('sound_items')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Supabase query error on sound_items by id:', error.message);
+    throw new Error(`Error al consultar sonido por id: ${error.message}`);
+  }
+
+  return (data as SoundItemRecord) || null;
 }
 
 export async function upsertSoundItemInSupabase(item: Partial<SoundItemRecord>): Promise<SoundItemRecord | null> {
   const supabase = getSupabaseServerClient();
-  if (!supabase || !item.id) return null;
-
-  try {
-    const payload = {
-      ...item,
-      updated_at: new Date().toISOString()
-    };
-
-    const { data, error } = await supabase
-      .from('sound_items')
-      .upsert(payload)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Supabase upsert error on sound_items:', error.message);
-      return null;
-    }
-
-    return data as SoundItemRecord;
-  } catch (err) {
-    console.error('Error upserting sound item in Supabase:', err);
-    return null;
+  if (!supabase || !item.id) {
+    throw new Error('Supabase no está disponible o el elemento no tiene ID');
   }
+
+  const payload = {
+    ...item,
+    updated_at: new Date().toISOString()
+  };
+
+  const { data, error } = await supabase
+    .from('sound_items')
+    .upsert(payload)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Supabase upsert error on sound_items:', error.message);
+    throw new Error(`Error guardando elemento en Supabase: ${error.message}`);
+  }
+
+  return data as SoundItemRecord;
 }
 
 export async function deleteSoundItemFromSupabase(id: string): Promise<boolean> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return false;
-
-  try {
-    // 1. Obtener registro para saber si tiene archivos en storage
-    const { data: item } = await supabase
-      .from('sound_items')
-      .select('audio_storage_path, cover_image')
-      .eq('id', id)
-      .single();
-
-    if (item?.audio_storage_path) {
-      await supabase.storage.from('anomaly-audio-masters').remove([item.audio_storage_path]);
-    }
-
-    // 2. Eliminar registro de PostgreSQL
-    const { error } = await supabase.from('sound_items').delete().eq('id', id);
-    if (error) {
-      console.error('Supabase delete error:', error.message);
-      return false;
-    }
-
-    return true;
-  } catch (err) {
-    console.error('Error deleting sound item from Supabase:', err);
-    return false;
+  if (!supabase) {
+    throw new Error('Supabase no está disponible');
   }
+
+  // 1. Obtener registro para saber si tiene archivos en storage
+  const { data: item } = await supabase
+    .from('sound_items')
+    .select('audio_storage_path, cover_image')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (item?.audio_storage_path) {
+    try {
+      await supabase.storage.from('anomaly-audio-masters').remove([item.audio_storage_path]);
+    } catch (e) {
+      console.warn('Aviso al eliminar audio master en storage:', e);
+    }
+  }
+
+  // 2. Eliminar registro de PostgreSQL
+  const { error } = await supabase.from('sound_items').delete().eq('id', id);
+  if (error) {
+    console.error('Supabase delete error:', error.message);
+    throw new Error(`Error al eliminar registro de sound_items: ${error.message}`);
+  }
+
+  return true;
 }
 
 // -----------------------------------------------------------------------------
 // ALMACENAMIENTO: SUPABASE STORAGE (BUCKETS PRIVADOS Y PÚBLICOS)
 // -----------------------------------------------------------------------------
 
+export async function checkFileExistsInStorage(bucket: string, filePath: string): Promise<boolean> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return false;
+
+  try {
+    const normalized = filePath.replace(/^\/+/, '');
+    const dir = path.dirname(normalized);
+    const base = path.basename(normalized);
+    const searchDir = dir === '.' ? '' : dir;
+
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .list(searchDir, { search: base, limit: 10 });
+
+    if (error || !data) return false;
+    return data.some((item) => item.name === base);
+  } catch {
+    return false;
+  }
+}
+
 export async function uploadAudioMasterToSupabase(
   buffer: Buffer,
   fileName: string,
   contentType: string
 ): Promise<{ path: string; error?: string } | null> {
+  const safeName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const storagePath = `masters/${safeName}`;
+  return uploadAudioMasterDeterministic(buffer, storagePath, contentType, false);
+}
+
+export async function uploadAudioMasterDeterministic(
+  buffer: Buffer,
+  storagePath: string,
+  contentType: string,
+  upsert = false
+): Promise<{ path: string; error?: string } | null> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return null;
 
   try {
-    const safeName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const storagePath = `masters/${safeName}`;
-
     const { data, error } = await supabase.storage
       .from('anomaly-audio-masters')
       .upload(storagePath, buffer, {
         contentType: contentType || 'audio/wav',
-        upsert: false
+        upsert
       });
 
     if (error) {
@@ -219,18 +265,26 @@ export async function uploadCoverToSupabase(
   fileName: string,
   contentType: string
 ): Promise<{ publicUrl: string; path: string; error?: string } | null> {
+  const safeName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const storagePath = `covers/${safeName}`;
+  return uploadCoverDeterministic(buffer, storagePath, contentType, false);
+}
+
+export async function uploadCoverDeterministic(
+  buffer: Buffer,
+  storagePath: string,
+  contentType: string,
+  upsert = false
+): Promise<{ publicUrl: string; path: string; error?: string } | null> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return null;
 
   try {
-    const safeName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const storagePath = `covers/${safeName}`;
-
     const { data, error } = await supabase.storage
       .from('anomaly-covers')
       .upload(storagePath, buffer, {
         contentType: contentType || 'image/jpeg',
-        upsert: false
+        upsert
       });
 
     if (error) {
@@ -277,54 +331,88 @@ export async function createSignedAudioUrl(
 // ÓRDENES Y DESCARGAS SEGURAS EN SUPABASE POSTGRESQL
 // -----------------------------------------------------------------------------
 
+export async function getOrderFromSupabase(orderId: string): Promise<OrderRecord | null> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    throw new Error('Supabase no está configurado');
+  }
+
+  const { data, error } = await supabase
+    .from('orders')
+    .select('*')
+    .eq('order_id', orderId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching order from Supabase:', error.message);
+    throw new Error(`Error consultando orden: ${error.message}`);
+  }
+
+  return (data as OrderRecord) || null;
+}
+
 export async function saveOrderInSupabase(order: OrderRecord): Promise<boolean> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return false;
-
-  try {
-    const { error } = await supabase.from('orders').upsert(order);
-    if (error) {
-      console.error('Error saving order to Supabase:', error.message);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception saving order in Supabase:', err);
-    return false;
+  if (!supabase) {
+    throw new Error('Supabase no está configurado');
   }
+
+  const { error } = await supabase.from('orders').upsert(order);
+  if (error) {
+    console.error('Error saving order to Supabase:', error.message);
+    throw new Error(`Error guardando orden: ${error.message}`);
+  }
+  return true;
+}
+
+export async function getDownloadTokenByOrderId(orderId: string): Promise<DownloadTokenRecord | null> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    throw new Error('Supabase no está configurado');
+  }
+
+  const { data, error } = await supabase
+    .from('download_tokens')
+    .select('*')
+    .eq('order_id', orderId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching download token by orderId:', error.message);
+    throw new Error(`Error consultando token de descarga: ${error.message}`);
+  }
+
+  return (data as DownloadTokenRecord) || null;
 }
 
 export async function createDownloadTokenInSupabase(
   token: string,
   orderId: string,
   itemId: string,
-  buyerEmail?: string,
+  buyerEmail?: string | null,
   expiresAt?: Date
 ): Promise<boolean> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return false;
-
-  try {
-    const expiration = expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const { error } = await supabase.from('download_tokens').insert({
-      token,
-      order_id: orderId,
-      item_id: itemId,
-      buyer_email: buyerEmail,
-      expires_at: expiration.toISOString(),
-      download_count: 0,
-      max_downloads: 5
-    });
-
-    if (error) {
-      console.error('Error creating download token in Supabase:', error.message);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception creating download token in Supabase:', err);
-    return false;
+  if (!supabase) {
+    throw new Error('Supabase no está configurado');
   }
+
+  const expiration = expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const { error } = await supabase.from('download_tokens').upsert({
+    token,
+    order_id: orderId,
+    item_id: itemId,
+    buyer_email: buyerEmail || null,
+    expires_at: expiration.toISOString(),
+    download_count: 0,
+    max_downloads: 5
+  });
+
+  if (error) {
+    console.error('Error creating download token in Supabase:', error.message);
+    throw new Error(`Error registrando token de descarga: ${error.message}`);
+  }
+  return true;
 }
 
 export async function verifyAndConsumeDownloadTokenInSupabase(
@@ -340,7 +428,7 @@ export async function verifyAndConsumeDownloadTokenInSupabase(
       .from('download_tokens')
       .select('*')
       .eq('token', token)
-      .single();
+      .maybeSingle();
 
     if (error || !record) {
       return { valid: false, error: 'Token de descarga no válido o inexistente.' };
@@ -361,12 +449,16 @@ export async function verifyAndConsumeDownloadTokenInSupabase(
       .update({ download_count: record.download_count + 1 })
       .eq('token', token);
 
-    await supabase.from('download_logs').insert({
-      token,
-      item_id: record.item_id,
-      ip_address: ipAddress || 'unknown',
-      user_agent: userAgent || 'unknown'
-    });
+    try {
+      await supabase.from('download_logs').insert({
+        token,
+        item_id: record.item_id,
+        ip_address: ipAddress || 'unknown',
+        user_agent: userAgent || 'unknown'
+      });
+    } catch (logErr) {
+      console.warn('Aviso al insertar download_log:', logErr);
+    }
 
     return { valid: true, tokenData: record as DownloadTokenRecord };
   } catch (err: any) {

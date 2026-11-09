@@ -1,7 +1,8 @@
 /**
  * ANOMALY SOUND - Backend Server
  * Express + Vite middleware full-stack server
- * Provides protected admin endpoints, persistent catalog database, and audio file serving.
+ * Provides protected admin endpoints, persistent catalog database, Supabase PostgreSQL/Storage integration,
+ * PayPal Sandbox checkout with idempotent capture, and secure signed audio downloads.
  */
 
 import dotenv from 'dotenv';
@@ -17,17 +18,25 @@ import { createServer as createViteServer } from 'vite';
 import {
   isSupabaseConfigured,
   getSoundItemsFromSupabase,
+  getSoundItemByIdFromSupabase,
   upsertSoundItemInSupabase,
   deleteSoundItemFromSupabase,
   uploadAudioMasterToSupabase,
   uploadCoverToSupabase,
   createSignedAudioUrl,
+  getOrderFromSupabase,
   saveOrderInSupabase,
+  getDownloadTokenByOrderId,
   createDownloadTokenInSupabase,
   verifyAndConsumeDownloadTokenInSupabase,
   checkSupabaseHealth
 } from './src/lib/supabaseServer';
-import { runLocalToSupabaseMigration } from './src/lib/migrationService';
+
+import {
+  runLocalToSupabaseMigration,
+  DEMO_ITEM_IDS,
+  isDemoItem
+} from './src/lib/migrationService';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,12 +56,12 @@ if (!fs.existsSync(AUDIO_UPLOADS_DIR)) fs.mkdirSync(AUDIO_UPLOADS_DIR, { recursi
 if (!fs.existsSync(COVERS_UPLOADS_DIR)) fs.mkdirSync(COVERS_UPLOADS_DIR, { recursive: true });
 
 // Admin credentials & token configuration (Exclusively from environment variables - No hardcoded fallback passwords)
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET || crypto.randomBytes(32).toString('hex');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@anomalysound.com';
 
-if (!ADMIN_PASSWORD || !ADMIN_SECRET) {
-  console.warn('[SEGURIDAD] Advertencia: ADMIN_PASSWORD o ADMIN_SECRET no están definidos en variables de entorno.');
+if (!ADMIN_PASSWORD) {
+  console.warn('[SEGURIDAD] Advertencia: ADMIN_PASSWORD no está definido en variables de entorno.');
 }
 
 // PayPal Configuration
@@ -63,8 +72,8 @@ const PAYPAL_BASE_URL = PAYPAL_ENV === 'production'
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
 
-// In-memory verification stores for orders and download authorizations
-interface PendingOrder {
+// Local in-memory structures for DEVELOPMENT ONLY (when Supabase is not configured)
+interface LocalPendingOrder {
   orderId: string;
   itemId: string;
   expectedAmount: string;
@@ -78,7 +87,7 @@ interface PendingOrder {
   paypalCaptureId?: string;
 }
 
-interface SecureDownloadToken {
+interface LocalSecureDownloadToken {
   token: string;
   itemId: string;
   orderId: string;
@@ -87,7 +96,85 @@ interface SecureDownloadToken {
   downloadCount: number;
 }
 
-interface OrderRecord {
+const localPendingOrders = new Map<string, LocalPendingOrder>();
+const localSecureDownloads = new Map<string, LocalSecureDownloadToken>();
+
+// Cookie parsing helper
+function parseCookies(cookieHeader?: string): Record<string, string> {
+  const list: Record<string, string> = {};
+  if (!cookieHeader) return list;
+  cookieHeader.split(';').forEach((cookie) => {
+    const [name, ...rest] = cookie.split('=');
+    const trimmed = name?.trim();
+    if (!trimmed) return;
+    const value = rest.join('=').trim();
+    list[trimmed] = decodeURIComponent(value);
+  });
+  return list;
+}
+
+// Administrative Session Management with HttpOnly Cookies & Revocation
+const revokedSessionIds = new Set<string>();
+
+interface AdminSessionPayload {
+  s: string;       // unique session id
+  exp: number;     // expiration timestamp in ms
+  role: 'admin';
+}
+
+function createAdminSessionToken(): string {
+  if (!ADMIN_SECRET) {
+    throw new Error('ADMIN_SECRET no está configurado en las variables de entorno');
+  }
+  const sessionId = crypto.randomBytes(24).toString('hex');
+  const payload: AdminSessionPayload = {
+    s: sessionId,
+    exp: Date.now() + 8 * 60 * 60 * 1000, // 8 hours validity
+    role: 'admin'
+  };
+  const payloadStr = JSON.stringify(payload);
+  const b64Payload = Buffer.from(payloadStr, 'utf-8').toString('base64url');
+  const signature = crypto.createHmac('sha256', ADMIN_SECRET).update(b64Payload).digest('hex');
+  return `${b64Payload}.${signature}`;
+}
+
+function verifyAdminSessionToken(token: string): { valid: boolean; sessionId?: string; error?: string } {
+  if (!ADMIN_SECRET) {
+    return { valid: false, error: 'ADMIN_SECRET no configurado en el servidor.' };
+  }
+  const parts = token.split('.');
+  if (parts.length !== 2) {
+    return { valid: false, error: 'Formato de token de sesión inválido.' };
+  }
+  const [b64Payload, signature] = parts;
+  const expectedSig = crypto.createHmac('sha256', ADMIN_SECRET).update(b64Payload).digest('hex');
+
+  const sigBuffer = Buffer.from(signature, 'hex');
+  const expectedBuffer = Buffer.from(expectedSig, 'hex');
+  if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+    return { valid: false, error: 'Firma de sesión inválida.' };
+  }
+
+  try {
+    const payloadStr = Buffer.from(b64Payload, 'base64url').toString('utf-8');
+    const payload: AdminSessionPayload = JSON.parse(payloadStr);
+
+    if (Date.now() > payload.exp) {
+      return { valid: false, error: 'Sesión administrativa expirada (máximo 8 horas de validez).' };
+    }
+
+    if (revokedSessionIds.has(payload.s)) {
+      return { valid: false, error: 'Sesión revocada previamente.' };
+    }
+
+    return { valid: true, sessionId: payload.s };
+  } catch {
+    return { valid: false, error: 'Error al decodificar la sesión.' };
+  }
+}
+
+// Local Orders DB helper for local dev mode only
+interface LocalOrderRecord {
   orderId: string;
   captureId: string;
   itemId: string;
@@ -99,10 +186,7 @@ interface OrderRecord {
   timestamp: number;
 }
 
-const pendingOrders = new Map<string, PendingOrder>();
-const secureDownloads = new Map<string, SecureDownloadToken>();
-
-function readOrdersDatabase(): OrderRecord[] {
+function readLocalOrdersDatabase(): LocalOrderRecord[] {
   try {
     if (!fs.existsSync(ORDERS_DB_PATH)) {
       fs.writeFileSync(ORDERS_DB_PATH, JSON.stringify([], null, 2), 'utf-8');
@@ -112,21 +196,22 @@ function readOrdersDatabase(): OrderRecord[] {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
-    console.error('Error reading orders DB:', err);
+    console.error('Error reading local orders DB:', err);
     return [];
   }
 }
 
-function saveOrderRecord(record: OrderRecord) {
+function saveLocalOrderRecord(record: LocalOrderRecord) {
   try {
-    const orders = readOrdersDatabase();
+    const orders = readLocalOrdersDatabase();
     orders.unshift(record);
     fs.writeFileSync(ORDERS_DB_PATH, JSON.stringify(orders, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Error saving order record:', err);
+    console.error('Error saving local order record:', err);
   }
 }
 
+// PayPal OAuth access token caching
 let cachedAccessToken: { token: string; expiresAt: number } | null = null;
 
 async function getPayPalAccessToken(): Promise<string> {
@@ -148,22 +233,21 @@ async function getPayPalAccessToken(): Promise<string> {
     body: 'grant_type=client_credentials'
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`PayPal OAuth error (${response.status}):`, errorText);
-    throw new Error(`Error de autenticación con PayPal (${response.status}): ${errorText}`);
+  const data = await response.json();
+  if (!response.ok || !data.access_token) {
+    console.error('Error fetching PayPal access token:', data);
+    throw new Error(`Fallo al autenticar con PayPal Sandbox: ${data.error_description || data.error || 'Credenciales inválidas'}`);
   }
 
-  const data = (await response.json()) as { access_token: string; expires_in: number };
   cachedAccessToken = {
     token: data.access_token,
-    expiresAt: Date.now() + Math.max(60, data.expires_in - 120) * 1000
+    expiresAt: Date.now() + (data.expires_in - 60) * 1000
   };
+
   return data.access_token;
 }
 
-// Sound item interface
-interface SoundItemDb {
+export interface SoundItemDb {
   id: string;
   section: 'one_shots' | 'beats' | 'samples';
   title: string;
@@ -175,9 +259,10 @@ interface SoundItemDb {
   fileSize: string;
   coverImage: string;
   audioUrl?: string;
-  syntheticType?: string;
+  audioStoragePath?: string;
+  syntheticType?: '808' | 'synth' | 'vocal' | 'perc' | 'beat_trap' | 'beat_drill' | 'beat_dembow' | 'beat_techno';
   isFree: boolean;
-  price?: number;
+  price: number;
   isPublished: boolean;
   downloads: number;
   description?: string;
@@ -185,43 +270,42 @@ interface SoundItemDb {
   updatedAt?: string;
 }
 
-// Default initial catalog if no DB exists
-const INITIAL_ITEMS: SoundItemDb[] = [
-  // --- ONE SHOTS ---
+// Initial demo items for initial bootstrap ONLY if no database exists
+const INITIAL_DEMO_ITEMS: SoundItemDb[] = [
   {
     id: 'os-01',
     section: 'one_shots',
     title: 'SUB SEISMIC 808',
     category: '808 Bass',
     key: 'C',
-    duration: 3.2,
+    duration: 1.2,
     format: 'WAV 24-bit',
-    fileSize: '1.2 MB',
-    coverImage: '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
+    fileSize: '820 KB',
+    coverImage: '/src/assets/images/pack_hyper_808_1793940338851.jpg',
     syntheticType: '808',
     isFree: true,
     price: 0,
     isPublished: true,
-    downloads: 3840,
-    description: 'Subgrave saturado analógicamente con armónicos de válvula y cola resonante limpia a 43Hz.',
+    downloads: 4120,
+    description: 'Subgrave 808 analógico procesado con distorsión armónica limpia.',
     createdAt: '2026-03-01'
   },
   {
     id: 'os-02',
     section: 'one_shots',
-    title: 'TITANIUM PUNCH KICK',
-    category: 'Kick',
-    key: 'F',
+    title: 'PUNCH TRANSIENT KICK',
+    category: 'Kick Drum',
+    key: 'G',
     duration: 0.6,
     format: 'WAV 24-bit',
-    fileSize: '480 KB',
+    fileSize: '430 KB',
     coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
-    syntheticType: 'kick',
+    syntheticType: 'perc',
     isFree: true,
     price: 0,
     isPublished: true,
-    downloads: 4120,
-    description: 'Golpe contundente con caída rápida de tono y transitorio quirúrgico para cortar en la mezcla.',
+    downloads: 3850,
+    description: 'Bombo con ataque definido a 4 kHz y cuerpo contundente en 55 Hz.',
     createdAt: '2026-03-02'
   },
   {
@@ -234,69 +318,50 @@ const INITIAL_ITEMS: SoundItemDb[] = [
     format: 'WAV 24-bit',
     fileSize: '510 KB',
     coverImage: '/src/assets/images/about_sculpture_1793942752249.jpg',
-    syntheticType: 'snare',
+    syntheticType: 'perc',
     isFree: true,
     price: 0,
     isPublished: true,
-    downloads: 2950,
-    description: 'Caja híbrida acústica-electrónica procesada a través de bus SSL 4000E con pegada metálica.',
+    downloads: 2980,
+    description: 'Caja híbrida acústico-digital con capas de ruido estéreo.',
     createdAt: '2026-03-03'
   },
   {
-    id: 'os-04',
-    section: 'one_shots',
-    title: 'CARBON CLOSED HAT',
-    category: 'Hi-Hat',
-    key: 'F#',
-    duration: 0.35,
-    format: 'WAV 24-bit',
-    fileSize: '290 KB',
-    coverImage: '/src/assets/images/pack_hyper_808_1793940338851.jpg',
-    syntheticType: 'hihat',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 2180,
-    description: 'Hi-hat con micro-dinámica analógica y textura de cinta de media pulgada.',
-    createdAt: '2026-03-04'
-  },
-  // --- BEATS ---
-  {
     id: 'beat-01',
     section: 'beats',
-    title: 'ECLIPSE',
-    category: 'Dark Heavy Beat',
+    title: 'CHRONOS',
+    category: 'Dark Trap Beat',
     bpm: 140,
-    key: 'D Minor',
+    key: 'C# Minor',
     duration: 5.0,
     format: 'WAV 24-bit + Stems',
-    fileSize: '85 MB',
-    coverImage: '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
-    syntheticType: 'beat_dembow',
+    fileSize: '65 MB',
+    coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
+    syntheticType: 'beat_trap',
     isFree: false,
-    price: 19.99,
+    price: 29.99,
     isPublished: true,
-    downloads: 1480,
-    description: 'Beat pesado y oscuro con bajos saturados, transitorios rápidos y atmósfera futurista.',
-    createdAt: '2026-03-05'
+    downloads: 1420,
+    description: 'Instrumental de trap pesado con sintetizadores modulares.',
+    createdAt: '2026-03-04'
   },
   {
     id: 'beat-02',
     section: 'beats',
-    title: 'CHRONOS',
-    category: 'Electronic Flow',
-    bpm: 130,
-    key: 'G# Minor',
+    title: 'VORTEX DRILL',
+    category: 'UK Drill Beat',
+    bpm: 144,
+    key: 'G Minor',
     duration: 5.0,
     format: 'WAV 24-bit + Stems',
-    fileSize: '92 MB',
-    coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
-    syntheticType: 'beat_trap',
+    fileSize: '72 MB',
+    coverImage: '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
+    syntheticType: 'beat_drill',
     isFree: false,
-    price: 19.99,
+    price: 34.99,
     isPublished: true,
-    downloads: 1260,
-    description: 'Instrumental de precisión técnica con sintetizadores modulares y polirritmia.',
+    downloads: 980,
+    description: 'Beat drill con 808s deslizantes y patrones complejos.',
     createdAt: '2026-03-06'
   },
   {
@@ -318,7 +383,6 @@ const INITIAL_ITEMS: SoundItemDb[] = [
     description: 'Beat con pegada sísmica, 0% regalías y descarga libre para creadores.',
     createdAt: '2026-03-07'
   },
-  // --- SAMPLES ---
   {
     id: 'smp-01',
     section: 'samples',
@@ -335,7 +399,7 @@ const INITIAL_ITEMS: SoundItemDb[] = [
     price: 0,
     isPublished: true,
     downloads: 2890,
-    description: 'Secuencia melódica grabada en sintetizador Prophet-6 con modulaciones analógicas ricas.',
+    description: 'Secuencia melódica grabada en sintetizador Prophet-6.',
     createdAt: '2026-03-08'
   },
   {
@@ -354,7 +418,7 @@ const INITIAL_ITEMS: SoundItemDb[] = [
     price: 0,
     isPublished: true,
     downloads: 3120,
-    description: 'Textura vocal con modulación de formantes, delays estéreo y microafinación espacial.',
+    description: 'Textura vocal con modulación de formantes y microafinación espacial.',
     createdAt: '2026-03-09'
   },
   {
@@ -373,21 +437,21 @@ const INITIAL_ITEMS: SoundItemDb[] = [
     price: 0,
     isPublished: true,
     downloads: 2470,
-    description: 'Acordes pasados por cinta analógica Otari con saturación armónica y calidez.',
+    description: 'Acordes pasados por cinta analógica Otari con saturación armónica.',
     createdAt: '2026-03-10'
   }
 ];
 
 const INITIAL_FLAG_PATH = path.join(DATA_DIR, '.initialized');
 
-// Helper to load items from JSON file database
-function readDatabase(): SoundItemDb[] {
+// Helper to load items from local JSON file database (only used in development without Supabase)
+function readLocalDatabase(): SoundItemDb[] {
   try {
     if (!fs.existsSync(CATALOG_DB_PATH)) {
       if (!fs.existsSync(INITIAL_FLAG_PATH)) {
         fs.writeFileSync(INITIAL_FLAG_PATH, 'true', 'utf-8');
-        fs.writeFileSync(CATALOG_DB_PATH, JSON.stringify(INITIAL_ITEMS, null, 2), 'utf-8');
-        return INITIAL_ITEMS;
+        fs.writeFileSync(CATALOG_DB_PATH, JSON.stringify(INITIAL_DEMO_ITEMS, null, 2), 'utf-8');
+        return INITIAL_DEMO_ITEMS;
       } else {
         fs.writeFileSync(CATALOG_DB_PATH, JSON.stringify([], null, 2), 'utf-8');
         return [];
@@ -397,25 +461,24 @@ function readDatabase(): SoundItemDb[] {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
-    console.error('Error reading catalog DB:', err);
+    console.error('Error reading local catalog DB:', err);
     return [];
   }
 }
 
-// Helper to save items to JSON file database
-function writeDatabase(items: SoundItemDb[]) {
+function writeLocalDatabase(items: SoundItemDb[]) {
   try {
     if (!fs.existsSync(INITIAL_FLAG_PATH)) {
       fs.writeFileSync(INITIAL_FLAG_PATH, 'true', 'utf-8');
     }
     fs.writeFileSync(CATALOG_DB_PATH, JSON.stringify(items, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Error saving to catalog DB:', err);
+    console.error('Error saving to local catalog DB:', err);
   }
 }
 
-// Initialize database file on startup
-readDatabase();
+// Initial check on startup
+readLocalDatabase();
 
 async function startServer() {
   const app = express();
@@ -428,25 +491,36 @@ async function startServer() {
   app.use('/uploads/audio', express.static(AUDIO_UPLOADS_DIR));
   app.use('/uploads/covers', express.static(COVERS_UPLOADS_DIR));
 
-  // Middleware: Protect admin routes
+  // Middleware: Protect admin routes via HttpOnly cookie or Bearer session token
   function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
     if (!ADMIN_SECRET) {
       return res.status(503).json({
         error: 'Seguridad: Variable ADMIN_SECRET no configurada en las variables de entorno del servidor.'
       });
     }
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No autorizado: Token de administrador ausente.' });
+
+    const cookies = parseCookies(req.headers.cookie);
+    let sessionToken = cookies['anomaly_admin_session'];
+
+    if (!sessionToken && req.headers.authorization?.startsWith('Bearer ')) {
+      sessionToken = req.headers.authorization.split(' ')[1];
     }
-    const token = authHeader.split(' ')[1];
-    if (token !== ADMIN_SECRET) {
-      return res.status(403).json({ error: 'Prohibido: Credencial o sesión de administrador inválida.' });
+
+    if (!sessionToken) {
+      return res.status(401).json({ error: 'No autorizado: Sesión de administrador requerida.' });
     }
+
+    const verification = verifyAdminSessionToken(sessionToken);
+    if (!verification.valid) {
+      return res.status(403).json({ error: `Acceso restringido: ${verification.error}` });
+    }
+
+    (req as any).adminSessionId = verification.sessionId;
     next();
   }
 
-  // --- ADMIN AUTH ROUTE (Secure - Strictly uses ADMIN_PASSWORD from env) ---
+  // --- ADMIN AUTH ROUTES ---
+  // POST /api/admin/login: Sets HttpOnly cookie, NEVER returns ADMIN_SECRET
   app.post('/api/admin/login', (req: Request, res: Response) => {
     const { password, email } = req.body;
 
@@ -461,9 +535,19 @@ async function startServer() {
     const isEmailValid = !email || !ADMIN_EMAIL || email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
     if (isPassValid && isEmailValid) {
+      const sessionToken = createAdminSessionToken();
+
+      res.cookie('anomaly_admin_session', sessionToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 8 * 60 * 60 * 1000 // 8 hours
+      });
+
       return res.json({
         success: true,
-        token: ADMIN_SECRET,
+        message: 'Sesión administrativa iniciada correctamente.',
         admin: { email: ADMIN_EMAIL, role: 'admin' }
       });
     }
@@ -474,9 +558,31 @@ async function startServer() {
     });
   });
 
-  // Verify admin session
-  app.get('/api/admin/verify', requireAdminAuth, (req: Request, res: Response) => {
-    res.json({ valid: true, user: { email: ADMIN_EMAIL, role: 'admin' } });
+  // POST /api/admin/logout: Revokes session and clears HttpOnly cookie
+  app.post('/api/admin/logout', (req: Request, res: Response) => {
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionToken = cookies['anomaly_admin_session'] || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+
+    if (sessionToken) {
+      const v = verifyAdminSessionToken(sessionToken);
+      if (v.sessionId) {
+        revokedSessionIds.add(v.sessionId);
+      }
+    }
+
+    res.clearCookie('anomaly_admin_session', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/'
+    });
+
+    return res.json({ success: true, message: 'Sesión administrativa cerrada y revocada.' });
+  });
+
+  // GET /api/admin/session: Check current session validity
+  app.get('/api/admin/session', requireAdminAuth, (req: Request, res: Response) => {
+    res.json({ authenticated: true, admin: { email: ADMIN_EMAIL, role: 'admin' } });
   });
 
   // --- SUPABASE STATUS & HEALTH DIAGNOSTIC ROUTE ---
@@ -488,7 +594,10 @@ async function startServer() {
   // --- SUPABASE DATA MIGRATION ROUTE ---
   app.post('/api/admin/migrate-to-supabase', requireAdminAuth, async (req: Request, res: Response) => {
     try {
-      const migrationResult = await runLocalToSupabaseMigration({ dataPath: DATA_DIR });
+      const migrationResult = await runLocalToSupabaseMigration({
+        dataPath: DATA_DIR,
+        skipDemoItems: true
+      });
       res.json(migrationResult);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -496,85 +605,92 @@ async function startServer() {
   });
 
   // --- PUBLIC CATALOG ROUTE ---
-  // Retrieves published items from Supabase PostgreSQL (or local fallback)
+  // When Supabase is configured, Supabase PostgreSQL is the SOLE authority.
+  // Never silently falls back to local demo data if Supabase fails.
   app.get('/api/catalog', async (req: Request, res: Response) => {
-    try {
-      if (isSupabaseConfigured()) {
+    if (isSupabaseConfigured()) {
+      try {
         const supabaseItems = await getSoundItemsFromSupabase(false);
-        if (supabaseItems && supabaseItems.length > 0) {
-          const formatted = supabaseItems.map((it) => ({
-            id: it.id,
-            section: it.section,
-            title: it.title,
-            category: it.category,
-            bpm: it.bpm,
-            key: it.key,
-            duration: it.duration,
-            format: it.format,
-            fileSize: it.file_size,
-            coverImage: it.cover_image,
-            audioUrl: it.audio_url,
-            audioStoragePath: it.audio_storage_path,
-            syntheticType: it.synthetic_type,
-            isFree: it.is_free,
-            price: it.price,
-            isPublished: it.is_published,
-            downloads: it.downloads,
-            description: it.description,
-            createdAt: it.created_at
-          }));
-          return res.json(formatted);
-        }
+        const formatted = supabaseItems.map((it) => ({
+          id: it.id,
+          section: it.section,
+          title: it.title,
+          category: it.category,
+          bpm: it.bpm,
+          key: it.key,
+          duration: it.duration,
+          format: it.format,
+          fileSize: it.file_size,
+          coverImage: it.cover_image,
+          audioUrl: it.audio_url,
+          audioStoragePath: it.audio_storage_path,
+          syntheticType: it.synthetic_type,
+          isFree: it.is_free,
+          price: it.price,
+          isPublished: it.is_published,
+          downloads: it.downloads,
+          description: it.description,
+          createdAt: it.created_at
+        }));
+        return res.json(formatted);
+      } catch (err: any) {
+        console.error('Supabase public catalog query failed:', err.message);
+        return res.status(503).json({
+          error: 'Error al consultar el catálogo en Supabase PostgreSQL. La base de datos no está disponible.',
+          code: 'SUPABASE_UNAVAILABLE',
+          details: err.message
+        });
       }
-    } catch (err) {
-      console.warn('Supabase catalog query failed, falling back to local DB:', err);
     }
 
-    const items = readDatabase();
+    // Local dev mode fallback only when Supabase is not configured
+    const items = readLocalDatabase();
     const publishedOnly = items.filter((it) => it.isPublished !== false);
     res.json(publishedOnly);
   });
 
   // --- PROTECTED ADMIN CATALOG ROUTE ---
-  // Returns all items including drafts
   app.get('/api/admin/catalog', requireAdminAuth, async (req: Request, res: Response) => {
-    try {
-      if (isSupabaseConfigured()) {
+    if (isSupabaseConfigured()) {
+      try {
         const supabaseItems = await getSoundItemsFromSupabase(true);
-        if (supabaseItems && supabaseItems.length > 0) {
-          const formatted = supabaseItems.map((it) => ({
-            id: it.id,
-            section: it.section,
-            title: it.title,
-            category: it.category,
-            bpm: it.bpm,
-            key: it.key,
-            duration: it.duration,
-            format: it.format,
-            fileSize: it.file_size,
-            coverImage: it.cover_image,
-            audioUrl: it.audio_url,
-            audioStoragePath: it.audio_storage_path,
-            syntheticType: it.synthetic_type,
-            isFree: it.is_free,
-            price: it.price,
-            isPublished: it.is_published,
-            downloads: it.downloads,
-            description: it.description,
-            createdAt: it.created_at
-          }));
-          return res.json(formatted);
-        }
+        const formatted = supabaseItems.map((it) => ({
+          id: it.id,
+          section: it.section,
+          title: it.title,
+          category: it.category,
+          bpm: it.bpm,
+          key: it.key,
+          duration: it.duration,
+          format: it.format,
+          fileSize: it.file_size,
+          coverImage: it.cover_image,
+          audioUrl: it.audio_url,
+          audioStoragePath: it.audio_storage_path,
+          syntheticType: it.synthetic_type,
+          isFree: it.is_free,
+          price: it.price,
+          isPublished: it.is_published,
+          downloads: it.downloads,
+          description: it.description,
+          createdAt: it.created_at
+        }));
+        return res.json(formatted);
+      } catch (err: any) {
+        console.error('Supabase admin catalog query failed:', err.message);
+        return res.status(503).json({
+          error: 'Error al consultar el catálogo administrativo en Supabase.',
+          code: 'SUPABASE_UNAVAILABLE',
+          details: err.message
+        });
       }
-    } catch (err) {
-      console.warn('Supabase admin catalog query failed, falling back to local DB:', err);
     }
 
-    const items = readDatabase();
+    const items = readLocalDatabase();
     res.json(items);
   });
 
-  // --- ADMIN UPLOAD FILE ROUTE (Supabase Storage with local fallback) ---
+  // --- ADMIN UPLOAD FILE ROUTE ---
   app.post('/api/admin/upload-file', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { fileName, fileType, dataBase64, kind } = req.body;
@@ -587,21 +703,20 @@ async function startServer() {
       const safeName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
       if (kind === 'audio') {
-        // Subir a Supabase Storage (Bucket privado 'anomaly-audio-masters') si está configurado
         if (isSupabaseConfigured()) {
           const uploadRes = await uploadAudioMasterToSupabase(buffer, safeName, fileType || 'audio/wav');
           if (uploadRes && uploadRes.path) {
             return res.json({
               success: true,
               storagePath: uploadRes.path,
-              url: `/api/download/master/${uploadRes.path}`,
               fileName: safeName,
               sizeBytes: buffer.length
             });
           }
+          return res.status(500).json({ error: 'Fallo al subir archivo master a Supabase Storage.', details: uploadRes?.error });
         }
 
-        // Almacenamiento local persistente
+        // Local development storage
         const filePath = path.join(AUDIO_UPLOADS_DIR, safeName);
         fs.writeFileSync(filePath, buffer);
         const url = `/uploads/audio/${safeName}`;
@@ -612,7 +727,6 @@ async function startServer() {
           sizeBytes: buffer.length
         });
       } else if (kind === 'cover') {
-        // Subir a Supabase Storage (Bucket público 'anomaly-covers') si está configurado
         if (isSupabaseConfigured()) {
           const uploadRes = await uploadCoverToSupabase(buffer, safeName, fileType || 'image/jpeg');
           if (uploadRes && uploadRes.publicUrl) {
@@ -623,9 +737,9 @@ async function startServer() {
               sizeBytes: buffer.length
             });
           }
+          return res.status(500).json({ error: 'Fallo al subir carátula a Supabase Storage.', details: uploadRes?.error });
         }
 
-        // Almacenamiento local persistente
         const filePath = path.join(COVERS_UPLOADS_DIR, safeName);
         fs.writeFileSync(filePath, buffer);
         const url = `/uploads/covers/${safeName}`;
@@ -653,64 +767,74 @@ async function startServer() {
         return res.status(400).json({ error: 'Título y sección son obligatorios.' });
       }
 
-      const items = readDatabase();
-      const newItem: SoundItemDb = {
-        id: itemData.id || `item_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        section: itemData.section as 'one_shots' | 'beats' | 'samples',
-        title: itemData.title.toUpperCase(),
-        category: itemData.category || (itemData.section === 'one_shots' ? '808 Bass' : itemData.section === 'beats' ? 'Beat' : 'Sample Loop'),
-        bpm: itemData.bpm,
+      const itemId = itemData.id || `item_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const title = itemData.title.toUpperCase();
+      const section = itemData.section as 'one_shots' | 'beats' | 'samples';
+      const category = itemData.category || (section === 'one_shots' ? '808 Bass' : section === 'beats' ? 'Beat' : 'Sample Loop');
+      const isFree = itemData.isFree ?? true;
+      const price = isFree ? 0 : (itemData.price || 19.99);
+      const isPublished = itemData.isPublished !== false;
+
+      const newItemPayload = {
+        id: itemId,
+        section,
+        title,
+        category,
+        bpm: itemData.bpm || null,
         key: itemData.key || 'C Minor',
-        duration: itemData.duration || (itemData.section === 'one_shots' ? 0.8 : itemData.section === 'beats' ? 5.0 : 4.0),
+        duration: itemData.duration || (section === 'one_shots' ? 0.8 : section === 'beats' ? 5.0 : 4.0),
         format: itemData.format || 'WAV 24-bit',
-        fileSize: itemData.fileSize || '12 MB',
-        coverImage: itemData.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
-        audioUrl: itemData.audioUrl,
-        syntheticType: itemData.syntheticType || 'synth',
-        isFree: itemData.isFree ?? true,
-        price: itemData.isFree ? 0 : (itemData.price || 19.99),
-        isPublished: itemData.isPublished !== false,
+        file_size: itemData.fileSize || '12 MB',
+        cover_image: itemData.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
+        audio_url: itemData.audioUrl || null,
+        audio_storage_path: (itemData as any).storagePath || itemData.audioStoragePath || null,
+        synthetic_type: itemData.syntheticType || null,
+        is_free: isFree,
+        price,
+        is_published: isPublished,
         downloads: 0,
-        description: itemData.description || '',
-        createdAt: new Date().toISOString().split('T')[0],
-        updatedAt: new Date().toISOString()
+        description: itemData.description || ''
       };
 
-      items.unshift(newItem);
-      writeDatabase(items);
-
-      // Sincronizar con Supabase PostgreSQL si está configurado
       if (isSupabaseConfigured()) {
-        try {
-          await upsertSoundItemInSupabase({
-            id: newItem.id,
-            section: newItem.section,
-            title: newItem.title,
-            category: newItem.category,
-            bpm: newItem.bpm,
-            key: newItem.key,
-            duration: newItem.duration,
-            format: newItem.format,
-            file_size: newItem.fileSize,
-            cover_image: newItem.coverImage,
-            audio_url: newItem.audioUrl,
-            audio_storage_path: (itemData as any).storagePath,
-            synthetic_type: newItem.syntheticType,
-            is_free: newItem.isFree,
-            price: newItem.price,
-            is_published: newItem.isPublished,
-            downloads: newItem.downloads,
-            description: newItem.description
-          });
-        } catch (supaErr) {
-          console.warn('Aviso: No se pudo replicar alta en Supabase:', supaErr);
-        }
+        const saved = await upsertSoundItemInSupabase(newItemPayload);
+        return res.status(201).json({
+          success: true,
+          item: saved,
+          message: isPublished ? 'Sonido guardado y publicado en Supabase.' : 'Sonido guardado como borrador en Supabase.'
+        });
       }
+
+      // Local dev mode
+      const localItems = readLocalDatabase();
+      const localItem: SoundItemDb = {
+        id: itemId,
+        section,
+        title,
+        category,
+        bpm: itemData.bpm,
+        key: newItemPayload.key,
+        duration: newItemPayload.duration,
+        format: newItemPayload.format,
+        fileSize: newItemPayload.file_size,
+        coverImage: newItemPayload.cover_image,
+        audioUrl: newItemPayload.audio_url || undefined,
+        audioStoragePath: newItemPayload.audio_storage_path || undefined,
+        syntheticType: itemData.syntheticType,
+        isFree,
+        price,
+        isPublished,
+        downloads: 0,
+        description: newItemPayload.description,
+        createdAt: new Date().toISOString().split('T')[0]
+      };
+      localItems.unshift(localItem);
+      writeLocalDatabase(localItems);
 
       return res.status(201).json({
         success: true,
-        item: newItem,
-        message: newItem.isPublished ? 'Sonido guardado y publicado en el catálogo público.' : 'Sonido guardado como borrador.'
+        item: localItem,
+        message: isPublished ? 'Sonido guardado y publicado en el catálogo local.' : 'Sonido guardado como borrador.'
       });
     } catch (err: any) {
       console.error('Error creating sound item:', err);
@@ -723,9 +847,35 @@ async function startServer() {
     try {
       const { id } = req.params;
       const patch = req.body;
-      const items = readDatabase();
-      const index = items.findIndex((it) => it.id === id);
 
+      if (isSupabaseConfigured()) {
+        const existing = await getSoundItemByIdFromSupabase(id);
+        if (!existing) {
+          return res.status(404).json({ error: 'Sonido no encontrado en Supabase.' });
+        }
+
+        const updated = await upsertSoundItemInSupabase({
+          id,
+          title: patch.title ? patch.title.toUpperCase() : existing.title,
+          category: patch.category !== undefined ? patch.category : existing.category,
+          bpm: patch.bpm !== undefined ? patch.bpm : existing.bpm,
+          key: patch.key !== undefined ? patch.key : existing.key,
+          duration: patch.duration !== undefined ? patch.duration : existing.duration,
+          format: patch.format !== undefined ? patch.format : existing.format,
+          file_size: patch.fileSize !== undefined ? patch.fileSize : existing.file_size,
+          cover_image: patch.coverImage !== undefined ? patch.coverImage : existing.cover_image,
+          is_free: patch.isFree !== undefined ? patch.isFree : existing.is_free,
+          price: patch.price !== undefined ? patch.price : existing.price,
+          is_published: patch.isPublished !== undefined ? patch.isPublished : existing.is_published,
+          description: patch.description !== undefined ? patch.description : existing.description
+        });
+
+        return res.json({ success: true, item: updated });
+      }
+
+      // Local dev mode
+      const items = readLocalDatabase();
+      const index = items.findIndex((it) => it.id === id);
       if (index === -1) {
         return res.status(404).json({ error: 'Sonido no encontrado.' });
       }
@@ -736,34 +886,8 @@ async function startServer() {
         title: patch.title ? patch.title.toUpperCase() : items[index].title,
         updatedAt: new Date().toISOString()
       };
-
       items[index] = updatedItem;
-      writeDatabase(items);
-
-      if (isSupabaseConfigured()) {
-        try {
-          await upsertSoundItemInSupabase({
-            id: updatedItem.id,
-            section: updatedItem.section,
-            title: updatedItem.title,
-            category: updatedItem.category,
-            bpm: updatedItem.bpm,
-            key: updatedItem.key,
-            duration: updatedItem.duration,
-            format: updatedItem.format,
-            file_size: updatedItem.fileSize,
-            cover_image: updatedItem.coverImage,
-            audio_url: updatedItem.audioUrl,
-            synthetic_type: updatedItem.syntheticType,
-            is_free: updatedItem.isFree,
-            price: updatedItem.price,
-            is_published: updatedItem.isPublished,
-            description: updatedItem.description
-          });
-        } catch (supaErr) {
-          console.warn('Aviso: No se pudo replicar actualización en Supabase:', supaErr);
-        }
-      }
+      writeLocalDatabase(items);
 
       return res.json({ success: true, item: updatedItem });
     } catch (err: any) {
@@ -776,9 +900,26 @@ async function startServer() {
   app.patch('/api/admin/items/:id/publish', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const items = readDatabase();
-      const index = items.findIndex((it) => it.id === id);
 
+      if (isSupabaseConfigured()) {
+        const existing = await getSoundItemByIdFromSupabase(id);
+        if (!existing) {
+          return res.status(404).json({ error: 'Sonido no encontrado en Supabase.' });
+        }
+
+        const newStatus = req.body.isPublished !== undefined ? Boolean(req.body.isPublished) : !existing.is_published;
+        await upsertSoundItemInSupabase({ id, is_published: newStatus });
+
+        return res.json({
+          success: true,
+          id,
+          isPublished: newStatus,
+          message: newStatus ? 'Publicado en el catálogo público' : 'Despublicado (ahora es borrador)'
+        });
+      }
+
+      const items = readLocalDatabase();
+      const index = items.findIndex((it) => it.id === id);
       if (index === -1) {
         return res.status(404).json({ error: 'Sonido no encontrado.' });
       }
@@ -786,19 +927,7 @@ async function startServer() {
       const newStatus = req.body.isPublished !== undefined ? Boolean(req.body.isPublished) : !items[index].isPublished;
       items[index].isPublished = newStatus;
       items[index].updatedAt = new Date().toISOString();
-
-      writeDatabase(items);
-
-      if (isSupabaseConfigured()) {
-        try {
-          await upsertSoundItemInSupabase({
-            id: items[index].id,
-            is_published: newStatus
-          });
-        } catch (supaErr) {
-          console.warn('Aviso: No se pudo replicar estado en Supabase:', supaErr);
-        }
-      }
+      writeLocalDatabase(items);
 
       return res.json({
         success: true,
@@ -816,23 +945,18 @@ async function startServer() {
   app.delete('/api/admin/items/:id', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const items = readDatabase();
-      const target = items.find((it) => it.id === id);
 
+      if (isSupabaseConfigured()) {
+        await deleteSoundItemFromSupabase(id);
+        return res.json({ success: true, id, message: 'Elemento y archivo master eliminados de Supabase.' });
+      }
+
+      const items = readLocalDatabase();
+      const target = items.find((it) => it.id === id);
       if (!target) {
         return res.status(404).json({ error: 'Sonido no encontrado.' });
       }
 
-      // Eliminar de Supabase PostgreSQL y Storage si está configurado
-      if (isSupabaseConfigured()) {
-        try {
-          await deleteSoundItemFromSupabase(id);
-        } catch (supaErr) {
-          console.warn('Aviso: No se pudo eliminar de Supabase:', supaErr);
-        }
-      }
-
-      // If item has a local uploaded audio file, delete it from disk
       if (target.audioUrl && target.audioUrl.startsWith('/uploads/audio/')) {
         const localFileName = path.basename(target.audioUrl);
         const fullAudioPath = path.join(AUDIO_UPLOADS_DIR, localFileName);
@@ -841,7 +965,6 @@ async function startServer() {
         }
       }
 
-      // If item has a custom uploaded cover, delete it from disk
       if (target.coverImage && target.coverImage.startsWith('/uploads/covers/')) {
         const localCoverName = path.basename(target.coverImage);
         const fullCoverPath = path.join(COVERS_UPLOADS_DIR, localCoverName);
@@ -851,63 +974,61 @@ async function startServer() {
       }
 
       const filtered = items.filter((it) => it.id !== id);
-      writeDatabase(filtered);
+      writeLocalDatabase(filtered);
 
-      return res.json({ success: true, id, message: 'Elemento y archivos eliminados correctamente.' });
+      return res.json({ success: true, id, message: 'Elemento y archivos eliminados localmente.' });
     } catch (err: any) {
       console.error('Error deleting sound item:', err);
       return res.status(500).json({ error: 'Error al eliminar el sonido.', details: err.message });
     }
   });
 
-  // --- ADMIN BULK CLEAR DEMO ITEMS ---
-  app.post('/api/admin/clear-demo-items', requireAdminAuth, (req: Request, res: Response) => {
+  // --- ADMIN CLEAR DEMO ITEMS ROUTE ---
+  // Safely identifies demo records by DEMO_ITEM_IDS, NEVER deletes real user products or files
+  app.post('/api/admin/clear-demo-items', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { section } = req.body;
-      let items = readDatabase();
-      if (section && section !== 'all') {
-        items = items.filter((it) => it.section !== section);
-      } else {
-        items = [];
+
+      if (isSupabaseConfigured()) {
+        const allItems = await getSoundItemsFromSupabase(true);
+        const demoItemsToDelete = allItems.filter((it) => {
+          if (!DEMO_ITEM_IDS.has(it.id)) return false;
+          if (section && section !== 'all' && it.section !== section) return false;
+          return true;
+        });
+
+        for (const demoItem of demoItemsToDelete) {
+          await deleteSoundItemFromSupabase(demoItem.id);
+        }
+
+        return res.json({
+          success: true,
+          deletedCount: demoItemsToDelete.length,
+          message: `Se eliminaron ${demoItemsToDelete.length} registros de demostración sin tocar productos reales.`
+        });
       }
-      writeDatabase(items);
-      return res.json({ success: true, remaining: items.length, message: 'Elementos eliminados permanentemente.' });
+
+      let items = readLocalDatabase();
+      const demoItemsToDelete = items.filter((it) => {
+        if (!DEMO_ITEM_IDS.has(it.id)) return false;
+        if (section && section !== 'all' && it.section !== section) return false;
+        return true;
+      });
+
+      const demoIdsSet = new Set(demoItemsToDelete.map((d) => d.id));
+      items = items.filter((it) => !demoIdsSet.has(it.id));
+      writeLocalDatabase(items);
+
+      return res.json({
+        success: true,
+        deletedCount: demoItemsToDelete.length,
+        remaining: items.length,
+        message: 'Registros de demostración eliminados permanentemente sin afectar productos reales.'
+      });
     } catch (err: any) {
       console.error('Error clearing demo items:', err);
-      return res.status(500).json({ error: 'Error al vaciar catálogo.', details: err.message });
+      return res.status(500).json({ error: 'Error al vaciar registros de demostración.', details: err.message });
     }
-  });
-
-  // --- DIRECT AUDIO DOWNLOAD ROUTE ---
-  app.get('/api/download/:id', (req: Request, res: Response) => {
-    const { id } = req.params;
-    const items = readDatabase();
-    const item = items.find((it) => it.id === id);
-
-    if (!item) {
-      return res.status(404).send('Archivo no encontrado');
-    }
-
-    if (!item.isPublished) {
-      return res.status(403).send('Archivo privado no disponible');
-    }
-
-    if (item.audioUrl && item.audioUrl.startsWith('/uploads/audio/')) {
-      const localFile = path.basename(item.audioUrl);
-      const filePath = path.join(AUDIO_UPLOADS_DIR, localFile);
-      if (fs.existsSync(filePath)) {
-        const ext = path.extname(localFile) || '.wav';
-        const downloadName = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND${ext}`;
-        return res.download(filePath, downloadName);
-      }
-    }
-
-    // Default generated master header for synthesized sounds
-    const ext = item.format.includes('MP3') ? 'mp3' : 'wav';
-    const filename = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.${ext}`;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'audio/wav');
-    res.send(`ANOMALY SOUND - MASTER FILE\nTitle: ${item.title}\nSection: ${item.section}\nCategory: ${item.category}\nFormat: ${item.format}\nLicense: 100% Royalty-Free Commercial License.`);
   });
 
   // --- 1. PAYPAL CONFIGURATION ROUTE (Public Client ID only) ---
@@ -921,6 +1042,7 @@ async function startServer() {
   });
 
   // --- 2. PAYPAL CREATE ORDER ROUTE (Server authoritative price & currency) ---
+  // Saves pending order in Supabase PostgreSQL (or local memory in dev)
   app.post('/api/paypal/create-order', async (req: Request, res: Response) => {
     try {
       const { itemId, buyerEmail, buyerName } = req.body;
@@ -929,20 +1051,42 @@ async function startServer() {
         return res.status(400).json({ error: 'El parámetro itemId es obligatorio.' });
       }
 
-      // Security: Strictly obtain item, price and currency directly from database
-      const items = readDatabase();
-      const item = items.find((it) => it.id === itemId);
-
-      if (!item) {
-        return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo.' });
-      }
-
-      if (item.isFree || !item.price || item.price <= 0) {
-        return res.status(400).json({ error: 'Este elemento es gratuito y no requiere compra.' });
-      }
-
-      const expectedAmount = Number(item.price).toFixed(2);
+      let itemTitle = '';
+      let itemFormat = 'WAV 24-bit';
+      let expectedAmount = '0.00';
       const currency = 'USD';
+
+      if (isSupabaseConfigured()) {
+        try {
+          const supaItem = await getSoundItemByIdFromSupabase(itemId);
+          if (!supaItem) {
+            return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo de Supabase.' });
+          }
+          if (supaItem.is_free || !supaItem.price || supaItem.price <= 0) {
+            return res.status(400).json({ error: 'Este elemento es gratuito y no requiere compra.' });
+          }
+          itemTitle = supaItem.title;
+          itemFormat = supaItem.format;
+          expectedAmount = Number(supaItem.price).toFixed(2);
+        } catch (supaErr: any) {
+          return res.status(503).json({
+            error: 'Error al consultar producto en Supabase.',
+            details: supaErr.message
+          });
+        }
+      } else {
+        const localItems = readLocalDatabase();
+        const localItem = localItems.find((it) => it.id === itemId);
+        if (!localItem) {
+          return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo local.' });
+        }
+        if (localItem.isFree || !localItem.price || localItem.price <= 0) {
+          return res.status(400).json({ error: 'Este elemento es gratuito y no requiere compra.' });
+        }
+        itemTitle = localItem.title;
+        itemFormat = localItem.format;
+        expectedAmount = Number(localItem.price).toFixed(2);
+      }
 
       if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
         return res.status(503).json({
@@ -957,9 +1101,9 @@ async function startServer() {
         intent: 'CAPTURE',
         purchase_units: [
           {
-            reference_id: item.id,
-            custom_id: item.id,
-            description: `ANOMALY SOUND - ${item.title} (${item.format})`,
+            reference_id: itemId,
+            custom_id: itemId,
+            description: `ANOMALY SOUND - ${itemTitle} (${itemFormat})`,
             amount: {
               currency_code: currency,
               value: expectedAmount
@@ -992,18 +1136,40 @@ async function startServer() {
         });
       }
 
-      // Securely bind orderID with item, expected amount, currency, and buyer data in server state
-      pendingOrders.set(orderData.id, {
-        orderId: orderData.id,
-        itemId: item.id,
-        expectedAmount,
-        currency,
-        title: item.title,
-        buyerEmail,
-        buyerName,
-        status: 'CREATED',
-        createdAt: Date.now()
-      });
+      // Persist order status 'CREATED' in Supabase PostgreSQL (Production)
+      if (isSupabaseConfigured()) {
+        try {
+          await saveOrderInSupabase({
+            order_id: orderData.id,
+            item_id: itemId,
+            item_title: itemTitle,
+            amount: Number(expectedAmount),
+            currency,
+            buyer_email: buyerEmail || null,
+            buyer_name: buyerName || null,
+            status: 'CREATED',
+            created_at: new Date().toISOString()
+          });
+        } catch (dbErr: any) {
+          console.error('Error persisting created order in Supabase:', dbErr);
+          return res.status(500).json({
+            error: 'Error al registrar orden inicial en la base de datos.',
+            details: dbErr.message
+          });
+        }
+      } else {
+        localPendingOrders.set(orderData.id, {
+          orderId: orderData.id,
+          itemId,
+          expectedAmount,
+          currency,
+          title: itemTitle,
+          buyerEmail,
+          buyerName,
+          status: 'CREATED',
+          createdAt: Date.now()
+        });
+      }
 
       return res.status(201).json({
         success: true,
@@ -1017,7 +1183,7 @@ async function startServer() {
     }
   });
 
-  // --- 3. PAYPAL CAPTURE ORDER ROUTE (Verification & Secure Token Generation) ---
+  // --- 3. PAYPAL CAPTURE ORDER ROUTE (Idempotent & Verified against Supabase) ---
   app.post('/api/paypal/capture-order', async (req: Request, res: Response) => {
     try {
       const { orderID } = req.body;
@@ -1026,30 +1192,158 @@ async function startServer() {
         return res.status(400).json({ error: 'El parámetro orderID es obligatorio.' });
       }
 
-      // 1. Verify order exists and was created on this server
-      const pending = pendingOrders.get(orderID);
-      if (!pending) {
-        return res.status(404).json({
-          error: 'Orden no encontrada o no iniciada en este servidor.'
-        });
-      }
-
-      // 2. Prevent duplicate capture / reuse of orders
-      if (pending.status === 'COMPLETED') {
-        return res.status(400).json({
-          error: 'Esta orden ya ha sido capturada previamente.'
-        });
-      }
-
       if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
         return res.status(503).json({
           error: 'Credenciales de PayPal Sandbox no configuradas en el servidor.'
         });
       }
 
-      const accessToken = await getPayPalAccessToken();
+      // -----------------------------------------------------------------------
+      // FLUJO DE PRODUCCIÓN: SUPABASE POSTGRESQL
+      // -----------------------------------------------------------------------
+      if (isSupabaseConfigured()) {
+        const order = await getOrderFromSupabase(orderID);
+        if (!order) {
+          return res.status(404).json({
+            error: 'Orden no encontrada en la base de datos de órdenes.'
+          });
+        }
 
-      // 3. Call PayPal Capture API
+        // IDEMPOTENCIA: Si la orden ya fue capturada previamente, entregar la autorización existente
+        if (order.status === 'COMPLETED') {
+          const existingToken = await getDownloadTokenByOrderId(orderID);
+          if (existingToken) {
+            return res.json({
+              success: true,
+              status: 'COMPLETED',
+              orderID,
+              transactionId: order.paypal_capture_id,
+              downloadToken: existingToken.token,
+              downloadUrl: `/api/download/secure/${existingToken.token}`,
+              expiresAt: new Date(existingToken.expires_at).getTime(),
+              message: 'La orden ya se encontraba capturada; se entrega la autorización de descarga correspondiente.'
+            });
+          }
+        }
+
+        const accessToken = await getPayPalAccessToken();
+
+        // Comprobar estado en PayPal primero para evitar doble captura
+        const checkRes = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderID}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const checkData = await checkRes.json();
+
+        let capturePaymentId = '';
+
+        if (checkData.status === 'COMPLETED') {
+          // Ya capturada en PayPal, extraer ID de captura
+          const pu = checkData.purchase_units?.[0];
+          capturePaymentId = pu?.payments?.captures?.[0]?.id || '';
+        } else if (checkData.status === 'APPROVED') {
+          // Ejecutar captura en PayPal
+          const captureResponse = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderID}/capture`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          const captureData = await captureResponse.json();
+
+          if (!captureResponse.ok || captureData.status !== 'COMPLETED') {
+            console.error('PayPal capture error response:', captureData);
+            return res.status(captureResponse.status || 500).json({
+              error: 'Error de PayPal al capturar el pago.',
+              details: captureData
+            });
+          }
+
+          const purchaseUnit = captureData.purchase_units?.[0];
+          const capturePayment = purchaseUnit?.payments?.captures?.[0];
+          capturePaymentId = capturePayment?.id || '';
+
+          // Validación estricta de importe y moneda contra PostgreSQL
+          const capturedAmount = capturePayment?.amount?.value;
+          const capturedCurrency = capturePayment?.amount?.currency_code;
+
+          if (
+            capturedCurrency !== order.currency ||
+            Number(capturedAmount) !== Number(order.amount)
+          ) {
+            return res.status(400).json({
+              error: 'Discrepancia en el importe o moneda capturada.',
+              expected: `${order.amount} ${order.currency}`,
+              received: `${capturedAmount} ${capturedCurrency}`
+            });
+          }
+        } else {
+          return res.status(400).json({
+            error: `La orden de PayPal no está en estado APPROVED ni COMPLETED (recibido: ${checkData.status}).`
+          });
+        }
+
+        // Actualizar orden en PostgreSQL a COMPLETED
+        await saveOrderInSupabase({
+          ...order,
+          status: 'COMPLETED',
+          paypal_capture_id: capturePaymentId,
+          captured_at: new Date().toISOString()
+        });
+
+        // Generar token criptográfico único con expiración de 24 horas y límite de 5 descargas
+        const downloadToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+        await createDownloadTokenInSupabase(
+          downloadToken,
+          orderID,
+          order.item_id,
+          order.buyer_email,
+          expiresAt
+        );
+
+        return res.json({
+          success: true,
+          status: 'COMPLETED',
+          orderID,
+          transactionId: capturePaymentId,
+          downloadToken,
+          downloadUrl: `/api/download/secure/${downloadToken}`,
+          expiresAt: expiresAt.getTime(),
+          item: {
+            id: order.item_id,
+            title: order.item_title
+          }
+        });
+      }
+
+      // -----------------------------------------------------------------------
+      // FLUJO DE DESARROLLO LOCAL (Cuando Supabase no está configurado)
+      // -----------------------------------------------------------------------
+      const pending = localPendingOrders.get(orderID);
+      if (!pending) {
+        return res.status(404).json({ error: 'Orden no encontrada en este servidor.' });
+      }
+
+      if (pending.status === 'COMPLETED') {
+        for (const [token, info] of localSecureDownloads.entries()) {
+          if (info.orderId === orderID) {
+            return res.json({
+              success: true,
+              status: 'COMPLETED',
+              orderID,
+              transactionId: pending.paypalCaptureId,
+              downloadToken: token,
+              downloadUrl: `/api/download/secure/${token}`,
+              expiresAt: info.expiresAt
+            });
+          }
+        }
+      }
+
+      const accessToken = await getPayPalAccessToken();
       const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderID}/capture`, {
         method: 'POST',
         headers: {
@@ -1057,50 +1351,22 @@ async function startServer() {
           'Content-Type': 'application/json'
         }
       });
-
       const captureData = await response.json();
 
-      if (!response.ok) {
-        console.error('PayPal capture error response:', captureData);
+      if (!response.ok || captureData.status !== 'COMPLETED') {
         return res.status(response.status || 500).json({
-          error: 'Error de PayPal al capturar el pago.',
+          error: 'Error de PayPal al capturar el pago local.',
           details: captureData
         });
       }
 
-      // 4. Strict security checks:
-      // A. Verify PayPal status is COMPLETED
-      if (captureData.status !== 'COMPLETED') {
-        return res.status(400).json({
-          error: `El estado de la orden no es COMPLETED (recibido: ${captureData.status}).`,
-          status: captureData.status
-        });
-      }
-
-      // B. Verify captured amount and currency against expected values
       const purchaseUnit = captureData.purchase_units?.[0];
       const capturePayment = purchaseUnit?.payments?.captures?.[0];
-      const capturedAmount = capturePayment?.amount?.value;
-      const capturedCurrency = capturePayment?.amount?.currency_code;
-
-      if (
-        capturedCurrency !== pending.currency ||
-        Number(capturedAmount) !== Number(pending.expectedAmount)
-      ) {
-        return res.status(400).json({
-          error: 'Discrepancia en el importe o moneda capturada.',
-          expected: `${pending.expectedAmount} ${pending.currency}`,
-          received: `${capturedAmount} ${capturedCurrency}`
-        });
-      }
-
-      // 5. Mark as completed
       pending.status = 'COMPLETED';
       pending.capturedAt = Date.now();
       pending.paypalCaptureId = capturePayment?.id;
 
-      // 6. Record order permanently in orders database & Supabase PostgreSQL
-      saveOrderRecord({
+      saveLocalOrderRecord({
         orderId: orderID,
         captureId: capturePayment?.id || '',
         itemId: pending.itemId,
@@ -1108,34 +1374,14 @@ async function startServer() {
         amount: pending.expectedAmount,
         currency: pending.currency,
         buyerEmail: pending.buyerEmail || captureData.payer?.email_address,
-        buyerName: pending.buyerName || `${captureData.payer?.name?.given_name || ''} ${captureData.payer?.name?.surname || ''}`.trim(),
+        buyerName: pending.buyerName,
         timestamp: Date.now()
       });
 
-      if (isSupabaseConfigured()) {
-        try {
-          await saveOrderInSupabase({
-            order_id: orderID,
-            paypal_capture_id: capturePayment?.id || '',
-            item_id: pending.itemId,
-            item_title: pending.title,
-            amount: Number(pending.expectedAmount),
-            currency: pending.currency,
-            buyer_email: pending.buyerEmail || captureData.payer?.email_address,
-            buyer_name: pending.buyerName || `${captureData.payer?.name?.given_name || ''} ${captureData.payer?.name?.surname || ''}`.trim(),
-            status: 'COMPLETED',
-            captured_at: new Date().toISOString()
-          });
-        } catch (supaErr) {
-          console.warn('Aviso: No se pudo registrar orden en Supabase:', supaErr);
-        }
-      }
-
-      // 7. Generate secure, time-limited download token (valid for 24 hours)
       const downloadToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
 
-      secureDownloads.set(downloadToken, {
+      localSecureDownloads.set(downloadToken, {
         token: downloadToken,
         itemId: pending.itemId,
         orderId: orderID,
@@ -1143,24 +1389,6 @@ async function startServer() {
         expiresAt,
         downloadCount: 0
       });
-
-      if (isSupabaseConfigured()) {
-        try {
-          await createDownloadTokenInSupabase(
-            downloadToken,
-            orderID,
-            pending.itemId,
-            pending.buyerEmail || captureData.payer?.email_address,
-            new Date(expiresAt)
-          );
-        } catch (supaErr) {
-          console.warn('Aviso: No se pudo registrar download token en Supabase:', supaErr);
-        }
-      }
-
-      // Load product details
-      const items = readDatabase();
-      const product = items.find((it) => it.id === pending.itemId);
 
       return res.json({
         success: true,
@@ -1170,12 +1398,10 @@ async function startServer() {
         downloadToken,
         downloadUrl: `/api/download/secure/${downloadToken}`,
         expiresAt,
-        item: product ? {
-          id: product.id,
-          title: product.title,
-          format: product.format,
-          fileSize: product.fileSize
-        } : undefined
+        item: {
+          id: pending.itemId,
+          title: pending.title
+        }
       });
     } catch (err: any) {
       console.error('Capture PayPal order error:', err);
@@ -1185,95 +1411,91 @@ async function startServer() {
     }
   });
 
-  // --- 4. SECURE DOWNLOAD ROUTE (Authenticated by verified PayPal purchase token) ---
+  // --- 4. SECURE DOWNLOAD ROUTE (Authenticated by verified token) ---
   app.get('/api/download/secure/:token', async (req: Request, res: Response) => {
     const { token } = req.params;
-    let verifiedItemId = '';
-    let verifiedOrderId = '';
 
-    // 1. Verificación contra Supabase si está disponible
     if (isSupabaseConfigured()) {
       try {
-        const supaVerification = await verifyAndConsumeDownloadTokenInSupabase(
+        const verification = await verifyAndConsumeDownloadTokenInSupabase(
           token,
           req.ip || req.socket.remoteAddress,
           req.headers['user-agent'] as string
         );
 
-        if (supaVerification.valid && supaVerification.tokenData) {
-          verifiedItemId = supaVerification.tokenData.item_id;
-          verifiedOrderId = supaVerification.tokenData.order_id;
+        if (!verification.valid || !verification.tokenData) {
+          return res.status(403).json({
+            error: verification.error || 'Token de descarga no válido, expirado o con límite de descargas superado.'
+          });
         }
-      } catch (err) {
-        console.warn('Aviso al verificar token en Supabase:', err);
+
+        const item = await getSoundItemByIdFromSupabase(verification.tokenData.item_id);
+        if (!item) {
+          return res.status(404).json({ error: 'El archivo adquirido no fue localizado en el catálogo.' });
+        }
+
+        if (item.audio_storage_path) {
+          const signedUrl = await createSignedAudioUrl(item.audio_storage_path, 3600);
+          if (signedUrl) {
+            return res.redirect(signedUrl);
+          }
+        }
+
+        // Si no tiene audio_storage_path, verificar archivo local si existe
+        if (item.audio_url && item.audio_url.startsWith('/uploads/audio/')) {
+          const localFile = path.basename(item.audio_url);
+          const fullPath = path.join(AUDIO_UPLOADS_DIR, localFile);
+          if (fs.existsSync(fullPath)) {
+            const ext = path.extname(localFile) || '.wav';
+            const downloadName = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND${ext}`;
+            return res.download(fullPath, downloadName);
+          }
+        }
+
+        // REGLA ESTRICTA: NUNCA generar audios ficticios ni textos WAV simulados
+        console.error(`[DESCARGA_BLOQUEADA] El archivo master original para "${item.title}" (ID: ${item.id}) no existe en Supabase Storage.`);
+        return res.status(404).json({
+          error: 'El archivo master original no se encuentra disponible en el almacenamiento. La incidencia ha sido registrada en soporte.',
+          itemId: item.id
+        });
+      } catch (err: any) {
+        return res.status(500).json({
+          error: 'Error al verificar la autorización de descarga.',
+          details: err.message
+        });
       }
     }
 
-    // 2. Verificación contra almacén local seguro (como respaldo o si Supabase no está configurado)
-    if (!verifiedItemId) {
-      const downloadInfo = secureDownloads.get(token);
-
-      if (!downloadInfo) {
-        return res.status(403).json({ error: 'Acceso no autorizado: Token de descarga no válido o inexistente.' });
-      }
-
-      if (Date.now() > downloadInfo.expiresAt) {
-        return res.status(403).json({ error: 'Enlace de descarga expirado (validez: 24 horas). Por favor, contacta con soporte.' });
-      }
-
-      downloadInfo.downloadCount++;
-      verifiedItemId = downloadInfo.itemId;
-      verifiedOrderId = downloadInfo.orderId;
+    // Local development mode
+    const downloadInfo = localSecureDownloads.get(token);
+    if (!downloadInfo) {
+      return res.status(403).json({ error: 'Acceso no autorizado: Token de descarga no válido o inexistente.' });
     }
 
-    // 3. Cargar información del producto
-    let item: any = null;
-    if (isSupabaseConfigured()) {
-      try {
-        const supaItems = await getSoundItemsFromSupabase(true);
-        item = supaItems?.find((it) => it.id === verifiedItemId);
-      } catch {}
+    if (Date.now() > downloadInfo.expiresAt) {
+      return res.status(403).json({ error: 'El enlace de descarga ha expirado (validez: 24 horas).' });
     }
+
+    downloadInfo.downloadCount++;
+
+    const items = readLocalDatabase();
+    const item = items.find((it) => it.id === downloadInfo.itemId);
     if (!item) {
-      const localItems = readDatabase();
-      item = localItems.find((it) => it.id === verifiedItemId);
+      return res.status(404).json({ error: 'Archivo no encontrado.' });
     }
 
-    if (!item) {
-      return res.status(404).json({ error: 'Archivo adquirido no encontrado en el sistema.' });
-    }
-
-    const itemTitle = item.title || 'ANOMALY_SOUND';
-    const audioStoragePath = item.audio_storage_path || item.audioStoragePath;
-
-    // 4. Caso A: Archivo alojado en Supabase Storage (Bucket privado 'anomaly-audio-masters')
-    if (isSupabaseConfigured() && audioStoragePath) {
-      const signedUrl = await createSignedAudioUrl(audioStoragePath, 3600);
-      if (signedUrl) {
-        return res.redirect(signedUrl);
-      }
-    }
-
-    // 5. Caso B: Archivo en disco local (/data/uploads/audio/)
-    const audioUrl = item.audioUrl || item.audio_url;
-    if (audioUrl && audioUrl.startsWith('/uploads/audio/')) {
-      const localFile = path.basename(audioUrl);
+    if (item.audioUrl && item.audioUrl.startsWith('/uploads/audio/')) {
+      const localFile = path.basename(item.audioUrl);
       const filePath = path.join(AUDIO_UPLOADS_DIR, localFile);
       if (fs.existsSync(filePath)) {
         const ext = path.extname(localFile) || '.wav';
-        const downloadName = `${itemTitle.replace(/\s+/g, '_')}_ANOMALY_SOUND${ext}`;
+        const downloadName = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND${ext}`;
         return res.download(filePath, downloadName);
       }
     }
 
-    // 6. Caso C: El archivo original no existe ni en Supabase Storage ni en disco.
-    // REGLA FUNDAMENTAL: NUNCA generar archivos WAV ficticios ni respuestas de texto con extensión WAV.
-    console.error(`[DESCARGA_BLOQUEADA] El archivo master original para "${itemTitle}" (ID: ${verifiedItemId}, Orden: ${verifiedOrderId}) no se encuentra en el almacenamiento.`);
-    return res.status(404).json({
-      error: 'El archivo master original no se encuentra disponible temporalmente en el almacenamiento. La incidencia ha sido registrada en soporte.',
-      itemId: verifiedItemId,
-      orderId: verifiedOrderId
-    });
+    console.error(`[DESCARGA_BLOQUEADA] Archivo local no encontrado para ${item.title}`);
+    return res.status(404).json({ error: 'Archivo original no disponible en el almacenamiento.' });
   });
 
   // --- VITE MIDDLEWARE / PRODUCTION STATIC SERVING ---
