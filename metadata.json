@@ -1,0 +1,6 @@
+{
+  "name": "KOOPER SOUND",
+  "description": "Plataforma premium y futurista de samples, drum kits, loops y paquetes de sonido para productores musicales.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
