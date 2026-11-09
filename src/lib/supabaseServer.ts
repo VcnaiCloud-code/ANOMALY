@@ -391,14 +391,20 @@ export async function createDownloadTokenInSupabase(
   itemId: string,
   buyerEmail?: string | null,
   expiresAt?: Date
-): Promise<boolean> {
+): Promise<{ success: boolean; token: string }> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
     throw new Error('Supabase no está configurado');
   }
 
+  // Garantizar un único token por orden: comprobar si ya existe uno activo
+  const existing = await getDownloadTokenByOrderId(orderId);
+  if (existing && existing.token) {
+    return { success: true, token: existing.token };
+  }
+
   const expiration = expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const { error } = await supabase.from('download_tokens').upsert({
+  const { error } = await supabase.from('download_tokens').insert({
     token,
     order_id: orderId,
     item_id: itemId,
@@ -409,10 +415,17 @@ export async function createDownloadTokenInSupabase(
   });
 
   if (error) {
+    // Si hubo un conflicto de clave única simultáneo, recuperar el token existente
+    if (error.code === '23505' || error.message?.includes('duplicate key') || error.message?.includes('unique')) {
+      const raceExisting = await getDownloadTokenByOrderId(orderId);
+      if (raceExisting && raceExisting.token) {
+        return { success: true, token: raceExisting.token };
+      }
+    }
     console.error('Error creating download token in Supabase:', error.message);
     throw new Error(`Error registrando token de descarga: ${error.message}`);
   }
-  return true;
+  return { success: true, token };
 }
 
 export async function verifyAndConsumeDownloadTokenInSupabase(
@@ -424,6 +437,26 @@ export async function verifyAndConsumeDownloadTokenInSupabase(
   if (!supabase) return { valid: false, error: 'Supabase no conectado' };
 
   try {
+    // 1. Intento transaccional primario mediante RPC en PostgreSQL si la función fue creada
+    try {
+      const { data: rpcRes, error: rpcError } = await supabase.rpc('consume_download_token', {
+        p_token: token,
+        p_ip: ipAddress || 'unknown',
+        p_user_agent: userAgent || 'unknown'
+      });
+
+      if (!rpcError && rpcRes && typeof rpcRes === 'object') {
+        if (rpcRes.valid) {
+          return { valid: true, tokenData: rpcRes.tokenData as DownloadTokenRecord };
+        } else {
+          return { valid: false, error: rpcRes.error || 'Token de descarga no autorizado.' };
+        }
+      }
+    } catch {
+      // Si la función RPC aún no está creada en Supabase, recurrir a control de concurrencia optimista
+    }
+
+    // 2. Control de Concurrencia Optimista Atómico en PostgreSQL
     const { data: record, error } = await supabase
       .from('download_tokens')
       .select('*')
@@ -443,12 +476,25 @@ export async function verifyAndConsumeDownloadTokenInSupabase(
       return { valid: false, error: 'Se ha alcanzado el límite máximo de descargas para este enlace.' };
     }
 
-    // Incrementar contador y registrar auditoría
-    await supabase
+    // Actualización atómica condicionada al valor actual exacto de download_count
+    // Si dos peticiones compiten, solo una afectará a 1 fila; la otra afectará 0 filas y será rechazada
+    const { data: updated, error: updateErr } = await supabase
       .from('download_tokens')
       .update({ download_count: record.download_count + 1 })
-      .eq('token', token);
+      .eq('token', token)
+      .eq('download_count', record.download_count)
+      .lt('download_count', record.max_downloads)
+      .select()
+      .maybeSingle();
 
+    if (updateErr || !updated) {
+      return {
+        valid: false,
+        error: 'Concurrencia: Se superó el límite de descargas simultáneas permitidas para esta autorización.'
+      };
+    }
+
+    // Registrar auditoría en download_logs
     try {
       await supabase.from('download_logs').insert({
         token,
@@ -460,7 +506,7 @@ export async function verifyAndConsumeDownloadTokenInSupabase(
       console.warn('Aviso al insertar download_log:', logErr);
     }
 
-    return { valid: true, tokenData: record as DownloadTokenRecord };
+    return { valid: true, tokenData: updated as DownloadTokenRecord };
   } catch (err: any) {
     console.error('Error verifying download token in Supabase:', err);
     return { valid: false, error: err.message };

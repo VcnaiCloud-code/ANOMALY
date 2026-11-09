@@ -799,16 +799,6 @@ export function getStoredCatalogItems(): SoundItem[] {
       }
     }
 
-    if (!hasInitialized) {
-      localStorage.setItem(CATALOG_INITIALIZED_KEY, 'true');
-      const initialWithPublished = INITIAL_CATALOG_ITEMS.map((it) => ({
-        ...it,
-        isPublished: it.isPublished ?? true
-      }));
-      localStorage.setItem(CATALOG_ITEMS_KEY, JSON.stringify(initialWithPublished));
-      return initialWithPublished;
-    }
-
     return [];
   } catch {
     return [];
@@ -867,10 +857,12 @@ export async function fetchPublicCatalogApi(): Promise<SoundItem[]> {
       saveStoredCatalogItems(data);
       return data;
     }
-  } catch (err) {
-    console.warn('API /api/catalog offline, using local cache:', err);
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `Error al conectar con el catálogo (HTTP ${res.status})`);
+  } catch (err: any) {
+    console.error('API /api/catalog error:', err.message);
+    throw err;
   }
-  return getStoredCatalogItems().filter((it) => it.isPublished !== false);
 }
 
 export async function checkAdminSessionApi(): Promise<{ authenticated: boolean }> {
@@ -1056,38 +1048,33 @@ export async function clearDemoItemsApi(section: string, token?: string): Promis
 }
 
 export async function uploadFileApi(file: File, kind: 'audio' | 'cover', token?: string): Promise<{ success: boolean; url?: string; storagePath?: string; error?: string }> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64 = (reader.result as string).split(',')[1];
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-        const res = await fetch('/api/admin/upload-file', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers,
-          body: JSON.stringify({
-            fileName: file.name,
-            fileType: file.type,
-            dataBase64: base64,
-            kind
-          })
-        });
-        const data = await res.json();
-        if (res.ok) {
-          resolve({ success: true, url: data.url, storagePath: data.storagePath });
-          return;
-        }
-        resolve({ success: false, error: data.error || 'Error al subir archivo' });
-      } catch (err: any) {
-        resolve({ success: false, error: err.message || 'Error de red al subir archivo' });
-      }
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': file.type || (kind === 'audio' ? 'audio/wav' : 'image/jpeg'),
+      'x-file-name': encodeURIComponent(file.name),
+      'x-file-kind': kind
     };
-    reader.onerror = () => resolve({ success: false, error: 'Error leyendo archivo' });
-    reader.readAsDataURL(file);
-  });
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch('/api/admin/upload-raw', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers,
+      body: file // Transmisión binaria nativa sin conversión a Base64 ni sobrecoste de memoria
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return {
+        success: true,
+        url: data.url,
+        storagePath: data.storagePath
+      };
+    }
+    return { success: false, error: data.error || 'Error al subir archivo' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error de conexión al subir archivo' };
+  }
 }
 
 
