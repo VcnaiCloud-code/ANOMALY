@@ -30,7 +30,13 @@ import {
   createDownloadTokenInSupabase,
   verifyAndConsumeDownloadTokenInSupabase,
   checkSupabaseHealth,
-  checkFileExistsInStorage
+  checkFileExistsInStorage,
+  isSessionRevokedInSupabase,
+  revokeSessionInSupabase,
+  checkLoginRateLimitInSupabase,
+  recordFailedLoginInSupabase,
+  clearLoginAttemptsInSupabase,
+  createSignedUploadUrlInSupabase
 } from './src/lib/supabaseServer';
 
 import {
@@ -50,7 +56,6 @@ const AUDIO_UPLOADS_DIR = path.join(UPLOADS_DIR, 'audio');
 const COVERS_UPLOADS_DIR = path.join(UPLOADS_DIR, 'covers');
 const CATALOG_DB_PATH = path.join(DATA_DIR, 'catalog_db.json');
 const ORDERS_DB_PATH = path.join(DATA_DIR, 'orders_db.json');
-const REVOKED_SESSIONS_PATH = path.join(DATA_DIR, 'revoked_sessions.json');
 
 // Ensure storage directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -127,43 +132,42 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
   return list;
 }
 
-// Persistent Session Revocation Store (Survives server restarts and multi-instances)
-function loadRevokedSessions(): Set<string> {
-  try {
-    if (fs.existsSync(REVOKED_SESSIONS_PATH)) {
-      const data = JSON.parse(fs.readFileSync(REVOKED_SESSIONS_PATH, 'utf-8'));
-      if (Array.isArray(data)) return new Set(data);
-    }
-  } catch {}
-  return new Set();
+// Persistent / Shared Session Revocation Store
+// En producción con Supabase: persiste en PostgreSQL (tabla public.admin_revoked_sessions) compartida entre instancias
+// En desarrollo local sin Supabase: fallback seguro en memoria RAM (sin depender del disco local)
+const localRevokedSessions = new Set<string>();
+
+async function isSessionRevoked(sessionId: string): Promise<boolean> {
+  if (isSupabaseConfigured()) {
+    const isRevokedInDb = await isSessionRevokedInSupabase(sessionId);
+    if (isRevokedInDb) return true;
+  }
+  return localRevokedSessions.has(sessionId);
 }
 
-function persistRevokedSession(sessionId: string) {
-  try {
-    const set = loadRevokedSessions();
-    set.add(sessionId);
-    fs.writeFileSync(REVOKED_SESSIONS_PATH, JSON.stringify(Array.from(set), null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Error persisting revoked session:', e);
+async function persistRevokedSession(sessionId: string, expiresAt?: Date) {
+  localRevokedSessions.add(sessionId);
+  if (isSupabaseConfigured()) {
+    await revokeSessionInSupabase(sessionId, expiresAt);
   }
 }
 
-function isSessionRevoked(sessionId: string): boolean {
-  const set = loadRevokedSessions();
-  return set.has(sessionId);
-}
-
-// Rate Limiting / Brute-force protection for login attempts
+// Rate Limiting / Brute-force protection persistente y compartido
 interface LoginAttemptRecord {
   count: number;
   firstAttempt: number;
   blockedUntil?: number;
 }
-const loginAttempts = new Map<string, LoginAttemptRecord>();
+const localLoginAttempts = new Map<string, LoginAttemptRecord>();
 
-function checkLoginRateLimit(ip: string): { allowed: boolean; remainingSeconds?: number } {
+async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number }> {
+  if (isSupabaseConfigured()) {
+    const dbCheck = await checkLoginRateLimitInSupabase(ip);
+    if (!dbCheck.allowed) return dbCheck;
+  }
+
   const now = Date.now();
-  const record = loginAttempts.get(ip);
+  const record = localLoginAttempts.get(ip);
   if (!record) return { allowed: true };
 
   if (record.blockedUntil && now < record.blockedUntil) {
@@ -171,25 +175,29 @@ function checkLoginRateLimit(ip: string): { allowed: boolean; remainingSeconds?:
     return { allowed: false, remainingSeconds };
   }
 
-  // Window of 15 minutes
+  // Ventana de 15 minutos
   if (now - record.firstAttempt > 15 * 60 * 1000) {
-    loginAttempts.delete(ip);
+    localLoginAttempts.delete(ip);
     return { allowed: true };
   }
 
   if (record.count >= 5) {
-    record.blockedUntil = now + 15 * 60 * 1000; // 15-minute lockout
+    record.blockedUntil = now + 15 * 60 * 1000; // Bloqueo temporal de 15 minutos
     return { allowed: false, remainingSeconds: 15 * 60 };
   }
 
   return { allowed: true };
 }
 
-function recordFailedLogin(ip: string) {
+async function recordFailedLogin(ip: string) {
+  if (isSupabaseConfigured()) {
+    await recordFailedLoginInSupabase(ip);
+  }
+
   const now = Date.now();
-  const record = loginAttempts.get(ip);
+  const record = localLoginAttempts.get(ip);
   if (!record || (now - record.firstAttempt > 15 * 60 * 1000)) {
-    loginAttempts.set(ip, { count: 1, firstAttempt: now });
+    localLoginAttempts.set(ip, { count: 1, firstAttempt: now });
   } else {
     record.count++;
     if (record.count >= 5) {
@@ -198,8 +206,11 @@ function recordFailedLogin(ip: string) {
   }
 }
 
-function clearLoginAttempts(ip: string) {
-  loginAttempts.delete(ip);
+async function clearLoginAttempts(ip: string) {
+  if (isSupabaseConfigured()) {
+    await clearLoginAttemptsInSupabase(ip);
+  }
+  localLoginAttempts.delete(ip);
 }
 
 interface AdminSessionPayload {
@@ -224,7 +235,7 @@ function createAdminSessionToken(): string {
   return `${b64Payload}.${signature}`;
 }
 
-function verifyAdminSessionToken(token: string): { valid: boolean; sessionId?: string; error?: string } {
+async function verifyAdminSessionToken(token: string): Promise<{ valid: boolean; sessionId?: string; error?: string }> {
   if (!ADMIN_SECRET) {
     return { valid: false, error: 'ADMIN_SECRET no configurado en el servidor.' };
   }
@@ -249,7 +260,7 @@ function verifyAdminSessionToken(token: string): { valid: boolean; sessionId?: s
       return { valid: false, error: 'Sesión administrativa expirada (máximo 8 horas de validez).' };
     }
 
-    if (isSessionRevoked(payload.s)) {
+    if (await isSessionRevoked(payload.s)) {
       return { valid: false, error: 'Sesión revocada previamente.' };
     }
 
@@ -383,7 +394,7 @@ async function startServer() {
   const app = express();
 
   // Middleware: Protect admin routes via HttpOnly cookie or Bearer session token
-  function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+  async function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
     if (isProduction && !process.env.ADMIN_SECRET) {
       return res.status(503).json({
         error: 'Configuración de seguridad incompleta: ADMIN_SECRET no está configurado en las variables de entorno de producción.'
@@ -401,7 +412,7 @@ async function startServer() {
       return res.status(401).json({ error: 'No autorizado: Sesión de administrador requerida.' });
     }
 
-    const verification = verifyAdminSessionToken(sessionToken);
+    const verification = await verifyAdminSessionToken(sessionToken);
     if (!verification.valid) {
       return res.status(403).json({ error: `Acceso restringido: ${verification.error}` });
     }
@@ -410,8 +421,237 @@ async function startServer() {
     next();
   }
 
-  // --- RAW BINARY STREAMING UPLOAD ROUTE (NO Base64, NO JSON bloat) ---
-  // Accepts up to 500MB WAV, AIFF, ZIP or 10MB cover images directly
+  // --- VALIDACIÓN DE CABECERAS Y FIRMAS BINARIAS (MAGIC BYTES) ---
+  function validateFileMagicBytes(buffer: Buffer, ext: string, kind: 'audio' | 'cover'): { valid: boolean; reason?: string } {
+    if (buffer.length < 4) {
+      return { valid: false, reason: 'Cabecera de archivo insuficiente para verificar formato.' };
+    }
+
+    const ascii4 = buffer.subarray(0, 4).toString('ascii');
+    const hex4 = buffer.subarray(0, 4).toString('hex').toLowerCase();
+
+    if (kind === 'audio') {
+      if (ext === '.wav') {
+        const isRiff = ascii4 === 'RIFF';
+        const isWave = buffer.length >= 12 && buffer.subarray(8, 12).toString('ascii') === 'WAVE';
+        if (!isRiff || !isWave) {
+          return { valid: false, reason: 'Cabecera RIFF/WAVE no válida para archivo .wav.' };
+        }
+        return { valid: true };
+      }
+      if (ext === '.aiff' || ext === '.aif') {
+        const isForm = ascii4 === 'FORM';
+        const isAiff = buffer.length >= 12 && (
+          buffer.subarray(8, 12).toString('ascii') === 'AIFF' ||
+          buffer.subarray(8, 12).toString('ascii') === 'AIFC'
+        );
+        if (!isForm || !isAiff) {
+          return { valid: false, reason: 'Cabecera FORM/AIFF no válida para archivo .aiff.' };
+        }
+        return { valid: true };
+      }
+      if (ext === '.zip') {
+        if (hex4 !== '504b0304' && hex4 !== '504b0506' && hex4 !== '504b0708') {
+          return { valid: false, reason: 'Firma de archivo ZIP (PK) no válida.' };
+        }
+        return { valid: true };
+      }
+      if (ext === '.mp3') {
+        const isId3 = ascii4.startsWith('ID3');
+        const isMpegFrame = (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0);
+        if (!isId3 && !isMpegFrame) {
+          return { valid: false, reason: 'Cabecera de audio MP3 (ID3 o sync frame) no válida.' };
+        }
+        return { valid: true };
+      }
+    }
+
+    if (kind === 'cover') {
+      if (ext === '.png') {
+        if (hex4 !== '89504e47') {
+          return { valid: false, reason: 'Firma PNG no válida.' };
+        }
+        return { valid: true };
+      }
+      if (ext === '.jpg' || ext === '.jpeg') {
+        if (buffer[0] !== 0xff || buffer[1] !== 0xd8 || buffer[2] !== 0xff) {
+          return { valid: false, reason: 'Firma JPEG no válida.' };
+        }
+        return { valid: true };
+      }
+      if (ext === '.webp') {
+        const isRiff = ascii4 === 'RIFF';
+        const isWebp = buffer.length >= 12 && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+        if (!isRiff || !isWebp) {
+          return { valid: false, reason: 'Cabecera WEBP no válida.' };
+        }
+        return { valid: true };
+      }
+    }
+
+    return { valid: false, reason: `Formato o extensión ${ext} no admitido para tipo ${kind}.` };
+  }
+
+  // --- 1. SOLICITUD DE AUTORIZACIÓN Y URL FIRMADA (SUBIDA DIRECTA CLIENTE -> SUPABASE STORAGE) ---
+  // Elimina la retención del archivo en RAM en el servidor Node.js
+  app.post('/api/admin/request-upload-signed-url', requireAdminAuth, express.json(), async (req: Request, res: Response) => {
+    try {
+      const { fileName, fileSize, fileType, kind, magicBytesBase64 } = req.body;
+
+      if (!fileName || !fileSize || !kind) {
+        return res.status(400).json({ error: 'Parámetros fileName, fileSize y kind son obligatorios.' });
+      }
+
+      const ext = path.extname(fileName).toLowerCase();
+      const safeBaseName = path.basename(fileName, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safeName = `${Date.now()}_${safeBaseName}${ext}`;
+
+      // 1. Validar tamaños máximos
+      if (kind === 'audio') {
+        const MAX_AUDIO_SIZE = 500 * 1024 * 1024;
+        if (fileSize > MAX_AUDIO_SIZE) {
+          return res.status(400).json({ error: 'El archivo excede el tamaño máximo permitido de 500 MB.' });
+        }
+        const allowedAudioExts = ['.wav', '.aiff', '.aif', '.mp3', '.zip'];
+        if (!allowedAudioExts.includes(ext)) {
+          return res.status(400).json({ error: `Extensión no admitida (${ext}). Permitidas: WAV, AIFF, MP3, ZIP.` });
+        }
+      } else if (kind === 'cover') {
+        const MAX_COVER_SIZE = 10 * 1024 * 1024;
+        if (fileSize > MAX_COVER_SIZE) {
+          return res.status(400).json({ error: 'La carátula excede el límite máximo de 10 MB.' });
+        }
+        const allowedCoverExts = ['.png', '.jpg', '.jpeg', '.webp'];
+        if (!allowedCoverExts.includes(ext)) {
+          return res.status(400).json({ error: `Extensión no admitida (${ext}). Permitidas: PNG, JPG, WEBP.` });
+        }
+      } else {
+        return res.status(400).json({ error: 'Tipo kind no válido (debe ser audio o cover).' });
+      }
+
+      // 2. Validar Magic Bytes de la cabecera enviada
+      if (magicBytesBase64) {
+        const headerBuffer = Buffer.from(magicBytesBase64, 'base64');
+        const magicCheck = validateFileMagicBytes(headerBuffer, ext, kind);
+        if (!magicCheck.valid) {
+          return res.status(400).json({ error: `Validación de Magic Bytes fallida: ${magicCheck.reason}` });
+        }
+      }
+
+      // 3. Si Supabase está configurado: generar URL firmada para subida directa al bucket
+      if (isSupabaseConfigured()) {
+        const bucket = kind === 'audio' ? 'anomaly-audio-masters' : 'anomaly-covers';
+        const storagePath = kind === 'audio' ? `masters/${safeName}` : `covers/${safeName}`;
+
+        const signedRes = await createSignedUploadUrlInSupabase(bucket, storagePath);
+        if (signedRes && signedRes.signedUrl) {
+          const supabaseUrl = process.env.SUPABASE_URL || '';
+          const publicUrl = kind === 'cover'
+            ? `${supabaseUrl}/storage/v1/object/public/anomaly-covers/${storagePath}`
+            : undefined;
+
+          return res.json({
+            success: true,
+            mode: 'supabase_direct_signed_url',
+            signedUrl: signedRes.signedUrl,
+            token: signedRes.token,
+            storagePath,
+            bucket,
+            publicUrl
+          });
+        }
+
+        return res.status(500).json({
+          error: 'No se pudo generar la URL firmada de subida en Supabase Storage.'
+        });
+      }
+
+      // 4. Si Supabase no está configurado: autorizar streaming local a disco
+      return res.json({
+        success: true,
+        mode: 'local_stream',
+        targetEndpoint: '/api/admin/upload-stream'
+      });
+    } catch (err: any) {
+      console.error('Error en /api/admin/request-upload-signed-url:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- 2. STREAMING LOCAL DIRECTO A DISCO (SIN BUFFERING EN RAM) ---
+  app.post('/api/admin/upload-stream', requireAdminAuth, (req: Request, res: Response) => {
+    try {
+      const rawFileName = req.headers['x-file-name']
+        ? decodeURIComponent(req.headers['x-file-name'] as string)
+        : 'stream_file';
+      const kind = (req.headers['x-file-kind'] as string) || 'audio';
+      const ext = path.extname(rawFileName).toLowerCase();
+      const safeBaseName = path.basename(rawFileName, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safeName = `${Date.now()}_${safeBaseName}${ext}`;
+
+      const targetDir = kind === 'audio' ? AUDIO_UPLOADS_DIR : COVERS_UPLOADS_DIR;
+      const targetPath = path.join(targetDir, safeName);
+
+      const writeStream = fs.createWriteStream(targetPath);
+      let totalBytes = 0;
+      let firstChunk: Buffer | null = null;
+      let isRejected = false;
+
+      req.on('data', (chunk: Buffer) => {
+        if (isRejected) return;
+        totalBytes += chunk.length;
+
+        // Comprobar límite
+        const limit = kind === 'audio' ? 500 * 1024 * 1024 : 10 * 1024 * 1024;
+        if (totalBytes > limit) {
+          isRejected = true;
+          writeStream.destroy();
+          if (fs.existsSync(targetPath)) {
+            try { fs.unlinkSync(targetPath); } catch {}
+          }
+          return res.status(400).json({ error: 'El archivo excede el tamaño máximo permitido.' });
+        }
+
+        // Validar magic bytes en primer chunk
+        if (!firstChunk && chunk.length >= 4) {
+          firstChunk = chunk;
+          const magicCheck = validateFileMagicBytes(firstChunk, ext, kind as 'audio' | 'cover');
+          if (!magicCheck.valid) {
+            isRejected = true;
+            writeStream.destroy();
+            if (fs.existsSync(targetPath)) {
+              try { fs.unlinkSync(targetPath); } catch {}
+            }
+            return res.status(400).json({ error: `Firma binaria no válida: ${magicCheck.reason}` });
+          }
+        }
+      });
+
+      req.pipe(writeStream);
+
+      writeStream.on('finish', () => {
+        if (isRejected) return;
+        const subDir = kind === 'audio' ? 'audio' : 'covers';
+        return res.json({
+          success: true,
+          url: `/uploads/${subDir}/${safeName}`,
+          storagePath: targetPath,
+          fileName: safeName,
+          sizeBytes: totalBytes
+        });
+      });
+
+      writeStream.on('error', (err) => {
+        if (!isRejected) {
+          return res.status(500).json({ error: 'Error al escribir flujo en disco.', details: err.message });
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- 3. ENDPOINT LEGACY PARA SUBIDAS BINARIAS (upload-raw) ---
   app.post(
     '/api/admin/upload-raw',
     requireAdminAuth,
@@ -547,9 +787,9 @@ async function startServer() {
 
   // --- ADMIN AUTH ROUTES ---
   // POST /api/admin/login with Rate Limiting protection against brute-force attacks
-  app.post('/api/admin/login', (req: Request, res: Response) => {
+  app.post('/api/admin/login', async (req: Request, res: Response) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const rateCheck = checkLoginRateLimit(ip);
+    const rateCheck = await checkLoginRateLimit(ip);
 
     if (!rateCheck.allowed) {
       return res.status(429).json({
@@ -569,7 +809,7 @@ async function startServer() {
 
     const effectiveAdminPassword = ADMIN_PASSWORD || (!isProduction ? 'anomaly2026' : '');
     if (!effectiveAdminPassword) {
-      recordFailedLogin(ip);
+      await recordFailedLogin(ip);
       return res.status(503).json({
         success: false,
         error: 'Seguridad requerida: Configura ADMIN_PASSWORD en tus variables de entorno para acceder al panel.'
@@ -580,7 +820,7 @@ async function startServer() {
     const isEmailValid = !email || !ADMIN_EMAIL || email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
     if (isPassValid && isEmailValid) {
-      clearLoginAttempts(ip);
+      await clearLoginAttempts(ip);
       const sessionToken = createAdminSessionToken();
 
       res.cookie('anomaly_admin_session', sessionToken, {
@@ -598,7 +838,7 @@ async function startServer() {
       });
     }
 
-    recordFailedLogin(ip);
+    await recordFailedLogin(ip);
     return res.status(401).json({
       success: false,
       error: 'Credenciales de acceso no válidas. Acceso restringido exclusivamente al administrador.'
@@ -606,14 +846,14 @@ async function startServer() {
   });
 
   // POST /api/admin/logout: Persistently revokes session and clears HttpOnly cookie
-  app.post('/api/admin/logout', (req: Request, res: Response) => {
+  app.post('/api/admin/logout', async (req: Request, res: Response) => {
     const cookies = parseCookies(req.headers.cookie);
     const sessionToken = cookies['anomaly_admin_session'] || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
 
     if (sessionToken) {
-      const v = verifyAdminSessionToken(sessionToken);
+      const v = await verifyAdminSessionToken(sessionToken);
       if (v.sessionId) {
-        persistRevokedSession(v.sessionId);
+        await persistRevokedSession(v.sessionId);
       }
     }
 

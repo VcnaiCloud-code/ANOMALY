@@ -400,12 +400,11 @@ export function getStoredProducts(): SoundProduct[] {
   try {
     const raw = localStorage.getItem(PRODUCTS_STORAGE_KEY);
     if (!raw) {
-      localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(INITIAL_PRODUCTS));
-      return INITIAL_PRODUCTS;
+      return [];
     }
     return JSON.parse(raw);
   } catch {
-    return INITIAL_PRODUCTS;
+    return [];
   }
 }
 
@@ -882,23 +881,20 @@ export async function checkAdminSessionApi(): Promise<{ authenticated: boolean }
 }
 
 export async function fetchAdminCatalogApi(token?: string): Promise<SoundItem[]> {
-  try {
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const res = await fetch('/api/admin/catalog', {
-      credentials: 'same-origin',
-      headers
-    });
-    if (res.ok) {
-      const data: SoundItem[] = await res.json();
-      saveStoredCatalogItems(data);
-      return data;
-    }
-  } catch (err) {
-    console.warn('API /api/admin/catalog error, using local items:', err);
+  const res = await fetch('/api/admin/catalog', {
+    credentials: 'same-origin',
+    headers
+  });
+  if (res.ok) {
+    const data: SoundItem[] = await res.json();
+    saveStoredCatalogItems(data);
+    return data;
   }
-  return getStoredCatalogItems();
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || `Error al obtener catálogo administrativo del servidor (HTTP ${res.status}).`);
 }
 
 export async function loginAdminApi(password: string, email?: string): Promise<{ success: boolean; error?: string }> {
@@ -1047,20 +1043,90 @@ export async function clearDemoItemsApi(section: string, token?: string): Promis
   return true;
 }
 
-export async function uploadFileApi(file: File, kind: 'audio' | 'cover', token?: string): Promise<{ success: boolean; url?: string; storagePath?: string; error?: string }> {
+export async function uploadFileApi(
+  file: File,
+  kind: 'audio' | 'cover',
+  token?: string
+): Promise<{ success: boolean; url?: string; storagePath?: string; error?: string }> {
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': file.type || (kind === 'audio' ? 'audio/wav' : 'image/jpeg'),
-      'x-file-name': encodeURIComponent(file.name),
-      'x-file-kind': kind
-    };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    // 1. Extraer los primeros 64 bytes para validación estricta de Magic Bytes en el servidor
+    let magicBytesBase64 = '';
+    try {
+      const slice = await file.slice(0, 64).arrayBuffer();
+      const bytes = new Uint8Array(slice);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      magicBytesBase64 = btoa(binary);
+    } catch {
+      // Fallback si no está disponible slice en entorno no estándar
+    }
 
-    const res = await fetch('/api/admin/upload-raw', {
+    // 2. Solicitar autorización y URL firmada de subida al servidor
+    const authHeaders: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+
+    const authRes = await fetch('/api/admin/request-upload-signed-url', {
       method: 'POST',
       credentials: 'same-origin',
-      headers,
-      body: file // Transmisión binaria nativa sin conversión a Base64 ni sobrecoste de memoria
+      headers: authHeaders,
+      body: JSON.stringify({
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        kind,
+        magicBytesBase64
+      })
+    });
+
+    const authData = await authRes.json();
+    if (!authRes.ok || !authData.success) {
+      return { success: false, error: authData.error || 'Autorización de subida denegada por el servidor.' };
+    }
+
+    // 3. MODO SUPABASE DIRECTO: Carga segura directa a Supabase Storage mediante URL firmada
+    // CERO consumo de RAM en Node.js (el navegador transmite el binario directo al bucket de Supabase)
+    if (authData.mode === 'supabase_direct_signed_url' && authData.signedUrl) {
+      const uploadRes = await fetch(authData.signedUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || (kind === 'audio' ? 'audio/wav' : 'image/jpeg')
+        },
+        body: file
+      });
+
+      if (!uploadRes.ok) {
+        const upErr = await uploadRes.text().catch(() => '');
+        return {
+          success: false,
+          error: `Error al transferir archivo a Supabase Storage: ${upErr || uploadRes.statusText}`
+        };
+      }
+
+      return {
+        success: true,
+        url: authData.publicUrl || '',
+        storagePath: authData.storagePath
+      };
+    }
+
+    // 4. MODO LOCAL STREAMING: Streaming directo a disco en entorno local sin buffering en RAM
+    const streamHeaders: Record<string, string> = {
+      'Content-Type': file.type || (kind === 'audio' ? 'audio/wav' : 'image/jpeg'),
+      'x-file-name': encodeURIComponent(file.name),
+      'x-file-kind': kind,
+      'x-file-size': String(file.size)
+    };
+    if (token) streamHeaders['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch('/api/admin/upload-stream', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: streamHeaders,
+      body: file
     });
 
     const data = await res.json();
@@ -1071,7 +1137,7 @@ export async function uploadFileApi(file: File, kind: 'audio' | 'cover', token?:
         storagePath: data.storagePath
       };
     }
-    return { success: false, error: data.error || 'Error al subir archivo' };
+    return { success: false, error: data.error || 'Error al transmitir archivo' };
   } catch (err: any) {
     return { success: false, error: err.message || 'Error de conexión al subir archivo' };
   }

@@ -577,3 +577,159 @@ export async function checkSupabaseHealth(): Promise<{
     };
   }
 }
+
+// -----------------------------------------------------------------------------
+// STORAGE: URL FIRMADA PARA SUBIDA DIRECTA (Cliente -> Supabase Storage)
+// -----------------------------------------------------------------------------
+
+export async function createSignedUploadUrlInSupabase(
+  bucket: 'anomaly-audio-masters' | 'anomaly-covers',
+  storagePath: string
+): Promise<{ signedUrl: string; token: string; path: string } | null> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUploadUrl(storagePath);
+
+    if (error || !data) {
+      console.error(`Error creando URL firmada de subida en bucket ${bucket}:`, error?.message);
+      return null;
+    }
+
+    return {
+      signedUrl: data.signedUrl,
+      token: data.token,
+      path: data.path
+    };
+  } catch (err: any) {
+    console.error('Excepción al crear URL firmada de subida en Supabase:', err);
+    return null;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// SESIONES ADMINISTRATIVAS Y RATE LIMITING PERSISTENTE COMPARTIDO (PostgreSQL)
+// -----------------------------------------------------------------------------
+
+export async function isSessionRevokedInSupabase(sessionId: string): Promise<boolean> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return false;
+
+  try {
+    const { data, error } = await supabase
+      .from('admin_revoked_sessions')
+      .select('session_id')
+      .eq('session_id', sessionId)
+      .maybeSingle();
+
+    if (error) {
+      return false;
+    }
+    return Boolean(data);
+  } catch {
+    return false;
+  }
+}
+
+export async function revokeSessionInSupabase(sessionId: string, expiresAt?: Date): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return;
+
+  try {
+    await supabase.from('admin_revoked_sessions').upsert({
+      session_id: sessionId,
+      revoked_at: new Date().toISOString(),
+      expires_at: expiresAt ? expiresAt.toISOString() : new Date(Date.now() + 8 * 3600 * 1000).toISOString()
+    });
+  } catch (err) {
+    console.warn('Aviso: no se pudo guardar sesión revocada en Supabase:', err);
+  }
+}
+
+export async function checkLoginRateLimitInSupabase(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number }> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return { allowed: true };
+
+  try {
+    const { data, error } = await supabase
+      .from('admin_login_attempts')
+      .select('*')
+      .eq('ip', ip)
+      .maybeSingle();
+
+    if (error || !data) return { allowed: true };
+
+    const now = Date.now();
+    if (data.blocked_until) {
+      const blockedTime = new Date(data.blocked_until).getTime();
+      if (now < blockedTime) {
+        const remainingSeconds = Math.ceil((blockedTime - now) / 1000);
+        return { allowed: false, remainingSeconds };
+      }
+    }
+
+    // Ventana de 15 minutos desde el primer intento
+    const firstTime = new Date(data.first_attempt).getTime();
+    if (now - firstTime > 15 * 60 * 1000) {
+      await supabase.from('admin_login_attempts').delete().eq('ip', ip);
+      return { allowed: true };
+    }
+
+    if (data.attempts >= 5) {
+      const blockedUntil = new Date(now + 15 * 60 * 1000).toISOString();
+      await supabase.from('admin_login_attempts').update({ blocked_until: blockedUntil }).eq('ip', ip);
+      return { allowed: false, remainingSeconds: 15 * 60 };
+    }
+
+    return { allowed: true };
+  } catch {
+    return { allowed: true };
+  }
+}
+
+export async function recordFailedLoginInSupabase(ip: string): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return;
+
+  try {
+    const { data } = await supabase
+      .from('admin_login_attempts')
+      .select('*')
+      .eq('ip', ip)
+      .maybeSingle();
+
+    const now = Date.now();
+    if (!data || (now - new Date(data.first_attempt).getTime() > 15 * 60 * 1000)) {
+      await supabase.from('admin_login_attempts').upsert({
+        ip,
+        attempts: 1,
+        first_attempt: new Date(now).toISOString(),
+        blocked_until: null
+      });
+    } else {
+      const newAttempts = data.attempts + 1;
+      const blockedUntil = newAttempts >= 5 ? new Date(now + 15 * 60 * 1000).toISOString() : null;
+      await supabase.from('admin_login_attempts').update({
+        attempts: newAttempts,
+        blocked_until: blockedUntil
+      }).eq('ip', ip);
+    }
+  } catch (err) {
+    console.warn('Aviso: no se pudo registrar fallo de login en Supabase:', err);
+  }
+}
+
+export async function clearLoginAttemptsInSupabase(ip: string): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return;
+
+  try {
+    await supabase.from('admin_login_attempts').delete().eq('ip', ip);
+  } catch (err) {
+    console.warn('Aviso: no se pudo limpiar intentos en Supabase:', err);
+  }
+}
+
