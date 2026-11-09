@@ -14,6 +14,21 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 
+import {
+  isSupabaseConfigured,
+  getSoundItemsFromSupabase,
+  upsertSoundItemInSupabase,
+  deleteSoundItemFromSupabase,
+  uploadAudioMasterToSupabase,
+  uploadCoverToSupabase,
+  createSignedAudioUrl,
+  saveOrderInSupabase,
+  createDownloadTokenInSupabase,
+  verifyAndConsumeDownloadTokenInSupabase,
+  checkSupabaseHealth
+} from './src/lib/supabaseServer';
+import { runLocalToSupabaseMigration } from './src/lib/migrationService';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -31,10 +46,14 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(AUDIO_UPLOADS_DIR)) fs.mkdirSync(AUDIO_UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(COVERS_UPLOADS_DIR)) fs.mkdirSync(COVERS_UPLOADS_DIR, { recursive: true });
 
-// Admin credentials & token configuration
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'anomaly_master_auth_2026_jwt_token';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'anomaly2026';
+// Admin credentials & token configuration (Exclusively from environment variables - No hardcoded fallback passwords)
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@anomalysound.com';
+
+if (!ADMIN_PASSWORD || !ADMIN_SECRET) {
+  console.warn('[SEGURIDAD] Advertencia: ADMIN_PASSWORD o ADMIN_SECRET no están definidos en variables de entorno.');
+}
 
 // PayPal Configuration
 const PAYPAL_ENV = process.env.PAYPAL_ENV || 'sandbox';
@@ -411,6 +430,11 @@ async function startServer() {
 
   // Middleware: Protect admin routes
   function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
+    if (!ADMIN_SECRET) {
+      return res.status(503).json({
+        error: 'Seguridad: Variable ADMIN_SECRET no configurada en las variables de entorno del servidor.'
+      });
+    }
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No autorizado: Token de administrador ausente.' });
@@ -422,11 +446,19 @@ async function startServer() {
     next();
   }
 
-  // --- ADMIN AUTH ROUTE ---
+  // --- ADMIN AUTH ROUTE (Secure - Strictly uses ADMIN_PASSWORD from env) ---
   app.post('/api/admin/login', (req: Request, res: Response) => {
     const { password, email } = req.body;
-    const isPassValid = password === ADMIN_PASSWORD || password === 'anomalysoundmaster';
-    const isEmailValid = !email || email === ADMIN_EMAIL || email === 'admin';
+
+    if (!ADMIN_PASSWORD || !ADMIN_SECRET) {
+      return res.status(503).json({
+        success: false,
+        error: 'Seguridad requerida: Configura ADMIN_PASSWORD y ADMIN_SECRET en tus variables de entorno para acceder al panel.'
+      });
+    }
+
+    const isPassValid = Boolean(password && password === ADMIN_PASSWORD);
+    const isEmailValid = !email || !ADMIN_EMAIL || email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
     if (isPassValid && isEmailValid) {
       return res.json({
@@ -438,7 +470,7 @@ async function startServer() {
 
     return res.status(401).json({
       success: false,
-      error: 'Credenciales de acceso no válidas. Acceso restringido exclusivamente a administradores.'
+      error: 'Credenciales de acceso no válidas. Acceso restringido exclusivamente al administrador.'
     });
   });
 
@@ -447,9 +479,57 @@ async function startServer() {
     res.json({ valid: true, user: { email: ADMIN_EMAIL, role: 'admin' } });
   });
 
+  // --- SUPABASE STATUS & HEALTH DIAGNOSTIC ROUTE ---
+  app.get('/api/admin/supabase-status', requireAdminAuth, async (req: Request, res: Response) => {
+    const health = await checkSupabaseHealth();
+    res.json(health);
+  });
+
+  // --- SUPABASE DATA MIGRATION ROUTE ---
+  app.post('/api/admin/migrate-to-supabase', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      const migrationResult = await runLocalToSupabaseMigration({ dataPath: DATA_DIR });
+      res.json(migrationResult);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // --- PUBLIC CATALOG ROUTE ---
-  // Strictly returns only published items; unpublished/draft items are completely filtered out!
-  app.get('/api/catalog', (req: Request, res: Response) => {
+  // Retrieves published items from Supabase PostgreSQL (or local fallback)
+  app.get('/api/catalog', async (req: Request, res: Response) => {
+    try {
+      if (isSupabaseConfigured()) {
+        const supabaseItems = await getSoundItemsFromSupabase(false);
+        if (supabaseItems && supabaseItems.length > 0) {
+          const formatted = supabaseItems.map((it) => ({
+            id: it.id,
+            section: it.section,
+            title: it.title,
+            category: it.category,
+            bpm: it.bpm,
+            key: it.key,
+            duration: it.duration,
+            format: it.format,
+            fileSize: it.file_size,
+            coverImage: it.cover_image,
+            audioUrl: it.audio_url,
+            audioStoragePath: it.audio_storage_path,
+            syntheticType: it.synthetic_type,
+            isFree: it.is_free,
+            price: it.price,
+            isPublished: it.is_published,
+            downloads: it.downloads,
+            description: it.description,
+            createdAt: it.created_at
+          }));
+          return res.json(formatted);
+        }
+      }
+    } catch (err) {
+      console.warn('Supabase catalog query failed, falling back to local DB:', err);
+    }
+
     const items = readDatabase();
     const publishedOnly = items.filter((it) => it.isPublished !== false);
     res.json(publishedOnly);
@@ -457,13 +537,44 @@ async function startServer() {
 
   // --- PROTECTED ADMIN CATALOG ROUTE ---
   // Returns all items including drafts
-  app.get('/api/admin/catalog', requireAdminAuth, (req: Request, res: Response) => {
+  app.get('/api/admin/catalog', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      if (isSupabaseConfigured()) {
+        const supabaseItems = await getSoundItemsFromSupabase(true);
+        if (supabaseItems && supabaseItems.length > 0) {
+          const formatted = supabaseItems.map((it) => ({
+            id: it.id,
+            section: it.section,
+            title: it.title,
+            category: it.category,
+            bpm: it.bpm,
+            key: it.key,
+            duration: it.duration,
+            format: it.format,
+            fileSize: it.file_size,
+            coverImage: it.cover_image,
+            audioUrl: it.audio_url,
+            audioStoragePath: it.audio_storage_path,
+            syntheticType: it.synthetic_type,
+            isFree: it.is_free,
+            price: it.price,
+            isPublished: it.is_published,
+            downloads: it.downloads,
+            description: it.description,
+            createdAt: it.created_at
+          }));
+          return res.json(formatted);
+        }
+      }
+    } catch (err) {
+      console.warn('Supabase admin catalog query failed, falling back to local DB:', err);
+    }
+
     const items = readDatabase();
     res.json(items);
   });
 
-  // --- ADMIN UPLOAD FILE ROUTE ---
-  // Uploads raw audio (WAV, MP3) or cover images with persistent disk storage
+  // --- ADMIN UPLOAD FILE ROUTE (Supabase Storage with local fallback) ---
   app.post('/api/admin/upload-file', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { fileName, fileType, dataBase64, kind } = req.body;
@@ -476,6 +587,21 @@ async function startServer() {
       const safeName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
       if (kind === 'audio') {
+        // Subir a Supabase Storage (Bucket privado 'anomaly-audio-masters') si está configurado
+        if (isSupabaseConfigured()) {
+          const uploadRes = await uploadAudioMasterToSupabase(buffer, safeName, fileType || 'audio/wav');
+          if (uploadRes && uploadRes.path) {
+            return res.json({
+              success: true,
+              storagePath: uploadRes.path,
+              url: `/api/download/master/${uploadRes.path}`,
+              fileName: safeName,
+              sizeBytes: buffer.length
+            });
+          }
+        }
+
+        // Almacenamiento local persistente
         const filePath = path.join(AUDIO_UPLOADS_DIR, safeName);
         fs.writeFileSync(filePath, buffer);
         const url = `/uploads/audio/${safeName}`;
@@ -486,6 +612,20 @@ async function startServer() {
           sizeBytes: buffer.length
         });
       } else if (kind === 'cover') {
+        // Subir a Supabase Storage (Bucket público 'anomaly-covers') si está configurado
+        if (isSupabaseConfigured()) {
+          const uploadRes = await uploadCoverToSupabase(buffer, safeName, fileType || 'image/jpeg');
+          if (uploadRes && uploadRes.publicUrl) {
+            return res.json({
+              success: true,
+              url: uploadRes.publicUrl,
+              fileName: safeName,
+              sizeBytes: buffer.length
+            });
+          }
+        }
+
+        // Almacenamiento local persistente
         const filePath = path.join(COVERS_UPLOADS_DIR, safeName);
         fs.writeFileSync(filePath, buffer);
         const url = `/uploads/covers/${safeName}`;
@@ -500,12 +640,12 @@ async function startServer() {
       return res.status(400).json({ error: 'Tipo de recurso no reconocido (debe ser audio o cover).' });
     } catch (err: any) {
       console.error('Upload file error:', err);
-      return res.status(500).json({ error: 'Error al persistir el archivo en disco.', details: err.message });
+      return res.status(500).json({ error: 'Error al persistir el archivo.', details: err.message });
     }
   });
 
   // --- ADMIN CREATE / PUBLISH ITEM ROUTE ---
-  app.post('/api/admin/items', requireAdminAuth, (req: Request, res: Response) => {
+  app.post('/api/admin/items', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const itemData = req.body as Partial<SoundItemDb>;
 
@@ -539,6 +679,34 @@ async function startServer() {
       items.unshift(newItem);
       writeDatabase(items);
 
+      // Sincronizar con Supabase PostgreSQL si está configurado
+      if (isSupabaseConfigured()) {
+        try {
+          await upsertSoundItemInSupabase({
+            id: newItem.id,
+            section: newItem.section,
+            title: newItem.title,
+            category: newItem.category,
+            bpm: newItem.bpm,
+            key: newItem.key,
+            duration: newItem.duration,
+            format: newItem.format,
+            file_size: newItem.fileSize,
+            cover_image: newItem.coverImage,
+            audio_url: newItem.audioUrl,
+            audio_storage_path: (itemData as any).storagePath,
+            synthetic_type: newItem.syntheticType,
+            is_free: newItem.isFree,
+            price: newItem.price,
+            is_published: newItem.isPublished,
+            downloads: newItem.downloads,
+            description: newItem.description
+          });
+        } catch (supaErr) {
+          console.warn('Aviso: No se pudo replicar alta en Supabase:', supaErr);
+        }
+      }
+
       return res.status(201).json({
         success: true,
         item: newItem,
@@ -551,7 +719,7 @@ async function startServer() {
   });
 
   // --- ADMIN UPDATE ITEM ROUTE ---
-  app.put('/api/admin/items/:id', requireAdminAuth, (req: Request, res: Response) => {
+  app.put('/api/admin/items/:id', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const patch = req.body;
@@ -572,6 +740,31 @@ async function startServer() {
       items[index] = updatedItem;
       writeDatabase(items);
 
+      if (isSupabaseConfigured()) {
+        try {
+          await upsertSoundItemInSupabase({
+            id: updatedItem.id,
+            section: updatedItem.section,
+            title: updatedItem.title,
+            category: updatedItem.category,
+            bpm: updatedItem.bpm,
+            key: updatedItem.key,
+            duration: updatedItem.duration,
+            format: updatedItem.format,
+            file_size: updatedItem.fileSize,
+            cover_image: updatedItem.coverImage,
+            audio_url: updatedItem.audioUrl,
+            synthetic_type: updatedItem.syntheticType,
+            is_free: updatedItem.isFree,
+            price: updatedItem.price,
+            is_published: updatedItem.isPublished,
+            description: updatedItem.description
+          });
+        } catch (supaErr) {
+          console.warn('Aviso: No se pudo replicar actualización en Supabase:', supaErr);
+        }
+      }
+
       return res.json({ success: true, item: updatedItem });
     } catch (err: any) {
       console.error('Error updating sound item:', err);
@@ -580,7 +773,7 @@ async function startServer() {
   });
 
   // --- ADMIN TOGGLE PUBLISH STATUS ROUTE ---
-  app.patch('/api/admin/items/:id/publish', requireAdminAuth, (req: Request, res: Response) => {
+  app.patch('/api/admin/items/:id/publish', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const items = readDatabase();
@@ -596,6 +789,17 @@ async function startServer() {
 
       writeDatabase(items);
 
+      if (isSupabaseConfigured()) {
+        try {
+          await upsertSoundItemInSupabase({
+            id: items[index].id,
+            is_published: newStatus
+          });
+        } catch (supaErr) {
+          console.warn('Aviso: No se pudo replicar estado en Supabase:', supaErr);
+        }
+      }
+
       return res.json({
         success: true,
         id,
@@ -609,7 +813,7 @@ async function startServer() {
   });
 
   // --- ADMIN DELETE ITEM ROUTE ---
-  app.delete('/api/admin/items/:id', requireAdminAuth, (req: Request, res: Response) => {
+  app.delete('/api/admin/items/:id', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const items = readDatabase();
@@ -617,6 +821,15 @@ async function startServer() {
 
       if (!target) {
         return res.status(404).json({ error: 'Sonido no encontrado.' });
+      }
+
+      // Eliminar de Supabase PostgreSQL y Storage si está configurado
+      if (isSupabaseConfigured()) {
+        try {
+          await deleteSoundItemFromSupabase(id);
+        } catch (supaErr) {
+          console.warn('Aviso: No se pudo eliminar de Supabase:', supaErr);
+        }
       }
 
       // If item has a local uploaded audio file, delete it from disk
@@ -886,7 +1099,7 @@ async function startServer() {
       pending.capturedAt = Date.now();
       pending.paypalCaptureId = capturePayment?.id;
 
-      // 6. Record order permanently in orders database
+      // 6. Record order permanently in orders database & Supabase PostgreSQL
       saveOrderRecord({
         orderId: orderID,
         captureId: capturePayment?.id || '',
@@ -898,6 +1111,25 @@ async function startServer() {
         buyerName: pending.buyerName || `${captureData.payer?.name?.given_name || ''} ${captureData.payer?.name?.surname || ''}`.trim(),
         timestamp: Date.now()
       });
+
+      if (isSupabaseConfigured()) {
+        try {
+          await saveOrderInSupabase({
+            order_id: orderID,
+            paypal_capture_id: capturePayment?.id || '',
+            item_id: pending.itemId,
+            item_title: pending.title,
+            amount: Number(pending.expectedAmount),
+            currency: pending.currency,
+            buyer_email: pending.buyerEmail || captureData.payer?.email_address,
+            buyer_name: pending.buyerName || `${captureData.payer?.name?.given_name || ''} ${captureData.payer?.name?.surname || ''}`.trim(),
+            status: 'COMPLETED',
+            captured_at: new Date().toISOString()
+          });
+        } catch (supaErr) {
+          console.warn('Aviso: No se pudo registrar orden en Supabase:', supaErr);
+        }
+      }
 
       // 7. Generate secure, time-limited download token (valid for 24 hours)
       const downloadToken = crypto.randomBytes(32).toString('hex');
@@ -911,6 +1143,20 @@ async function startServer() {
         expiresAt,
         downloadCount: 0
       });
+
+      if (isSupabaseConfigured()) {
+        try {
+          await createDownloadTokenInSupabase(
+            downloadToken,
+            orderID,
+            pending.itemId,
+            pending.buyerEmail || captureData.payer?.email_address,
+            new Date(expiresAt)
+          );
+        } catch (supaErr) {
+          console.warn('Aviso: No se pudo registrar download token en Supabase:', supaErr);
+        }
+      }
 
       // Load product details
       const items = readDatabase();
@@ -940,44 +1186,94 @@ async function startServer() {
   });
 
   // --- 4. SECURE DOWNLOAD ROUTE (Authenticated by verified PayPal purchase token) ---
-  app.get('/api/download/secure/:token', (req: Request, res: Response) => {
+  app.get('/api/download/secure/:token', async (req: Request, res: Response) => {
     const { token } = req.params;
-    const downloadInfo = secureDownloads.get(token);
+    let verifiedItemId = '';
+    let verifiedOrderId = '';
 
-    if (!downloadInfo) {
-      return res.status(403).send('Acceso no autorizado: Token de descarga no válido o inexistente.');
+    // 1. Verificación contra Supabase si está disponible
+    if (isSupabaseConfigured()) {
+      try {
+        const supaVerification = await verifyAndConsumeDownloadTokenInSupabase(
+          token,
+          req.ip || req.socket.remoteAddress,
+          req.headers['user-agent'] as string
+        );
+
+        if (supaVerification.valid && supaVerification.tokenData) {
+          verifiedItemId = supaVerification.tokenData.item_id;
+          verifiedOrderId = supaVerification.tokenData.order_id;
+        }
+      } catch (err) {
+        console.warn('Aviso al verificar token en Supabase:', err);
+      }
     }
 
-    if (Date.now() > downloadInfo.expiresAt) {
-      return res.status(403).send('Enlace de descarga expirado (validez: 24 horas). Por favor, contacta con soporte si necesitas renovarlo.');
+    // 2. Verificación contra almacén local seguro (como respaldo o si Supabase no está configurado)
+    if (!verifiedItemId) {
+      const downloadInfo = secureDownloads.get(token);
+
+      if (!downloadInfo) {
+        return res.status(403).json({ error: 'Acceso no autorizado: Token de descarga no válido o inexistente.' });
+      }
+
+      if (Date.now() > downloadInfo.expiresAt) {
+        return res.status(403).json({ error: 'Enlace de descarga expirado (validez: 24 horas). Por favor, contacta con soporte.' });
+      }
+
+      downloadInfo.downloadCount++;
+      verifiedItemId = downloadInfo.itemId;
+      verifiedOrderId = downloadInfo.orderId;
     }
 
-    downloadInfo.downloadCount++;
-
-    const items = readDatabase();
-    const item = items.find((it) => it.id === downloadInfo.itemId);
+    // 3. Cargar información del producto
+    let item: any = null;
+    if (isSupabaseConfigured()) {
+      try {
+        const supaItems = await getSoundItemsFromSupabase(true);
+        item = supaItems?.find((it) => it.id === verifiedItemId);
+      } catch {}
+    }
+    if (!item) {
+      const localItems = readDatabase();
+      item = localItems.find((it) => it.id === verifiedItemId);
+    }
 
     if (!item) {
-      return res.status(404).send('Archivo adquirido no encontrado en el sistema.');
+      return res.status(404).json({ error: 'Archivo adquirido no encontrado en el sistema.' });
     }
 
-    // If item has uploaded file in storage
-    if (item.audioUrl && item.audioUrl.startsWith('/uploads/audio/')) {
-      const localFile = path.basename(item.audioUrl);
+    const itemTitle = item.title || 'ANOMALY_SOUND';
+    const audioStoragePath = item.audio_storage_path || item.audioStoragePath;
+
+    // 4. Caso A: Archivo alojado en Supabase Storage (Bucket privado 'anomaly-audio-masters')
+    if (isSupabaseConfigured() && audioStoragePath) {
+      const signedUrl = await createSignedAudioUrl(audioStoragePath, 3600);
+      if (signedUrl) {
+        return res.redirect(signedUrl);
+      }
+    }
+
+    // 5. Caso B: Archivo en disco local (/data/uploads/audio/)
+    const audioUrl = item.audioUrl || item.audio_url;
+    if (audioUrl && audioUrl.startsWith('/uploads/audio/')) {
+      const localFile = path.basename(audioUrl);
       const filePath = path.join(AUDIO_UPLOADS_DIR, localFile);
       if (fs.existsSync(filePath)) {
         const ext = path.extname(localFile) || '.wav';
-        const downloadName = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND${ext}`;
+        const downloadName = `${itemTitle.replace(/\s+/g, '_')}_ANOMALY_SOUND${ext}`;
         return res.download(filePath, downloadName);
       }
     }
 
-    // Default synthesized master file
-    const ext = item.format.includes('MP3') ? 'mp3' : 'wav';
-    const filename = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.${ext}`;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'audio/wav');
-    res.send(`ANOMALY SOUND - ARCHIVO MASTER ADQUIRIDO (LICENCIA COMERCIAL VERIFICADA)\nPedido: ${downloadInfo.orderId}\nProducto: ${item.title}\nSección: ${item.section}\nFormato: ${item.format}\nLicencia: 100% Royalty-Free Comercial Master.\nComprador: ${downloadInfo.buyerEmail || 'Verificado'}`);
+    // 6. Caso C: El archivo original no existe ni en Supabase Storage ni en disco.
+    // REGLA FUNDAMENTAL: NUNCA generar archivos WAV ficticios ni respuestas de texto con extensión WAV.
+    console.error(`[DESCARGA_BLOQUEADA] El archivo master original para "${itemTitle}" (ID: ${verifiedItemId}, Orden: ${verifiedOrderId}) no se encuentra en el almacenamiento.`);
+    return res.status(404).json({
+      error: 'El archivo master original no se encuentra disponible temporalmente en el almacenamiento. La incidencia ha sido registrada en soporte.',
+      itemId: verifiedItemId,
+      orderId: verifiedOrderId
+    });
   });
 
   // --- VITE MIDDLEWARE / PRODUCTION STATIC SERVING ---

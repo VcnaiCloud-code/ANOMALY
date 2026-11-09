@@ -528,7 +528,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             </button>
 
             <div className="text-center pt-2">
-              <span className="text-[11px] text-zinc-600 font-mono">Clave por defecto: anomaly2026</span>
+              <span className="text-[11px] text-zinc-500 font-mono">Autenticación segura vinculada a variables de entorno</span>
             </div>
           </form>
         </div>

@@ -38,10 +38,9 @@ export function setAdminSession(active: boolean) {
 }
 
 export function verifyAdminCredentials(key: string): boolean {
-  const validKeys = ['anomaly2026', 'admin@anomalysound.com', 'anomalysoundmaster'];
   const storedPass = localStorage.getItem('anomaly_custom_admin_key');
-  if (storedPass && key === storedPass) return true;
-  return validKeys.includes(key.trim());
+  if (storedPass && key && key === storedPass) return true;
+  return false;
 }
 
 // Initialize IndexedDB
@@ -904,15 +903,8 @@ export async function loginAdminApi(password: string, email?: string): Promise<{
       return { success: true, token: data.token };
     }
     return { success: false, error: data.error || 'Credenciales incorrectas' };
-  } catch (err) {
-    // Local fallback check
-    if (verifyAdminCredentials(password)) {
-      const fallbackToken = 'anomaly_master_auth_2026_jwt_token';
-      setAdminToken(fallbackToken);
-      setAdminSession(true);
-      return { success: true, token: fallbackToken };
-    }
-    return { success: false, error: 'Error de conexión o credencial inválida.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error de conexión con el servidor de autenticación.' };
   }
 }
 
