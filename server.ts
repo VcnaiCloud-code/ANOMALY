@@ -148,6 +148,9 @@ async function isSessionRevoked(sessionId: string): Promise<{ revoked: boolean; 
     if (isRevokedInDb.error) {
       return { revoked: false, error: isRevokedInDb.error };
     }
+    if (isProduction && isRevokedInDb.isTableMissing) {
+      return { revoked: false, error: 'Tabla admin_revoked_sessions ausente en la base de datos de producción.' };
+    }
     if (isRevokedInDb.revoked) return { revoked: true };
   }
   return { revoked: localRevokedSessions.has(sessionId) };
@@ -172,6 +175,9 @@ async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; rema
   if (isSupabaseConfigured()) {
     const dbCheck = await checkLoginRateLimitInSupabase(ip);
     if (dbCheck.error) {
+      return { allowed: false, isError: true };
+    }
+    if (isProduction && dbCheck.isTableMissing) {
       return { allowed: false, isError: true };
     }
     if (!dbCheck.allowed) return dbCheck;
@@ -846,10 +852,27 @@ async function startServer() {
 
     const { password, email } = req.body;
 
+    // VALIDACIÓN ESTRICTA: Correo y contraseña obligatorios
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ success: false, error: 'El correo electrónico administrativo es obligatorio.' });
+    }
+    if (!password || typeof password !== 'string' || !password.trim()) {
+      return res.status(400).json({ success: false, error: 'La contraseña administrativa es obligatoria.' });
+    }
+
     if (isProduction && !process.env.ADMIN_SECRET) {
       return res.status(503).json({
         success: false,
         error: 'Error de configuración: ADMIN_SECRET no está configurado en las variables de entorno de producción.'
+      });
+    }
+
+    // EN PRODUCCIÓN: Prohibir cualquier contraseña predeterminada
+    if (isProduction && !process.env.ADMIN_PASSWORD) {
+      await recordFailedLogin(ip);
+      return res.status(503).json({
+        success: false,
+        error: 'Seguridad de producción: ADMIN_PASSWORD debe estar configurado en las variables de entorno.'
       });
     }
 
@@ -862,8 +885,14 @@ async function startServer() {
       });
     }
 
-    const isPassValid = Boolean(password && password === effectiveAdminPassword);
-    const isEmailValid = !email || !ADMIN_EMAIL || email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    // Validación segura de correo y contraseña con protección contra timing attacks
+    const cleanEmail = email.trim().toLowerCase();
+    const expectedEmail = (ADMIN_EMAIL || '').trim().toLowerCase();
+    const isEmailValid = cleanEmail === expectedEmail;
+
+    const passBuf = Buffer.from(password);
+    const expectedPassBuf = Buffer.from(effectiveAdminPassword);
+    const isPassValid = passBuf.length === expectedPassBuf.length && crypto.timingSafeEqual(passBuf, expectedPassBuf);
 
     if (isPassValid && isEmailValid) {
       await clearLoginAttempts(ip);
@@ -872,7 +901,7 @@ async function startServer() {
       res.cookie('anomaly_admin_session', sessionToken, {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'lax',
+        sameSite: 'strict',
         path: '/',
         maxAge: 8 * 60 * 60 * 1000 // 8 hours
       });
@@ -906,7 +935,7 @@ async function startServer() {
     res.clearCookie('anomaly_admin_session', {
       httpOnly: true,
       secure: isProduction,
-      sameSite: 'lax',
+      sameSite: 'strict',
       path: '/'
     });
 
@@ -1363,7 +1392,36 @@ async function startServer() {
 
       if (isSupabaseConfigured()) {
         try {
-          const supaItem = await getSoundItemByIdFromSupabase(itemId);
+          let supaItem = await getSoundItemByIdFromSupabase(itemId);
+          if (!supaItem) {
+            const localItems = readLocalDatabase();
+            const localItem = localItems.find((it) => it.id === itemId);
+            if (!localItem) {
+              return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo de Supabase.' });
+            }
+            // Auto-persistir en sound_items para garantizar que la restricción de clave foránea en orders no falle
+            await upsertSoundItemInSupabase({
+              id: localItem.id,
+              section: localItem.section,
+              title: localItem.title,
+              category: localItem.category,
+              bpm: localItem.bpm,
+              key: localItem.key,
+              duration: localItem.duration,
+              format: localItem.format,
+              file_size: localItem.fileSize,
+              cover_image: localItem.coverImage,
+              audio_url: localItem.audioUrl,
+              audio_storage_path: localItem.audioStoragePath,
+              synthetic_type: localItem.syntheticType,
+              is_free: localItem.isFree,
+              price: localItem.price,
+              is_published: localItem.isPublished,
+              downloads: localItem.downloads || 0,
+              description: localItem.description || ''
+            });
+            supaItem = await getSoundItemByIdFromSupabase(itemId);
+          }
           if (!supaItem) {
             return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo de Supabase.' });
           }
@@ -1881,8 +1939,8 @@ async function startServer() {
           }
         }
 
-        // Comprobar archivo físico local si existiera
-        if (item.audio_url && item.audio_url.startsWith('/uploads/audio/')) {
+        // Comprobar archivo físico local ÚNICAMENTE en entorno de desarrollo local (nunca en producción)
+        if (!isProduction && item.audio_url && item.audio_url.startsWith('/uploads/audio/')) {
           const localFile = path.basename(item.audio_url);
           const fullPath = path.join(AUDIO_UPLOADS_DIR, localFile);
           if (fs.existsSync(fullPath)) {

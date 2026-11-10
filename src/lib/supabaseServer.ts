@@ -412,6 +412,13 @@ export async function claimOrderForCaptureInSupabase(
             token: rpcRes.token as DownloadTokenRecord
           };
         }
+        if (rpcRes.status === 'IN_PROGRESS') {
+          return {
+            success: false,
+            status: 'IN_PROGRESS',
+            error: rpcRes.error || 'La orden está siendo procesada concurrentemente por otra instancia.'
+          };
+        }
         if (rpcRes.success) {
           return {
             success: true,
@@ -441,17 +448,35 @@ export async function claimOrderForCaptureInSupabase(
       };
     }
 
+    // Si captured_at está fijado y tiene menos de 45 segundos, otra instancia está procesando la captura
+    if (order.captured_at) {
+      const claimAge = Date.now() - new Date(order.captured_at).getTime();
+      if (claimAge < 45000) {
+        return {
+          success: false,
+          status: 'IN_PROGRESS',
+          error: 'La orden está siendo procesada concurrentemente por otra instancia.'
+        };
+      }
+    }
+
     // 3. Mecanismo de exclusión mutua persistente entre instancias de Cloud Run:
-    // Reservamos la captura actualizando captured_at de forma condicionada a que sea NULL y status CREATED
+    // Reservamos la captura actualizando captured_at de forma condicionada
     const claimTimestamp = new Date().toISOString();
-    const { data: claimed, error: claimErr } = await supabase
+    let claimQuery = supabase
       .from('orders')
       .update({ captured_at: claimTimestamp })
       .eq('order_id', orderId)
-      .eq('status', 'CREATED')
-      .is('captured_at', null)
-      .select()
-      .maybeSingle();
+      .eq('status', 'CREATED');
+
+    if (order.captured_at) {
+      // Reclamar reserva expirada de un intento interrumpido
+      claimQuery = claimQuery.eq('captured_at', order.captured_at);
+    } else {
+      claimQuery = claimQuery.is('captured_at', null);
+    }
+
+    const { data: claimed, error: claimErr } = await claimQuery.select().maybeSingle();
 
     if (claimErr) {
       return { success: false, status: 'ERROR', error: claimErr.message };
@@ -595,8 +620,14 @@ export async function verifyAndConsumeDownloadTokenInSupabase(
           return { valid: false, error: rpcRes.error || 'Token de descarga no autorizado.' };
         }
       }
-    } catch {
-      // Si la función RPC aún no está creada en Supabase, recurrir a control de concurrencia optimista
+
+      // Si la RPC existe pero devolvió un error de base de datos, fallar de forma segura (fail-closed)
+      if (rpcError && rpcError.code !== '42883') {
+        console.error('Error al invocar consume_download_token en Supabase:', rpcError.message);
+        return { valid: false, error: `Error transaccional en PostgreSQL: ${rpcError.message}` };
+      }
+    } catch (rpcErr: any) {
+      // Si la función RPC aún no está creada en Supabase (error 42883), continuar al control optimista
     }
 
     // 2. Control de Concurrencia Optimista Atómico en PostgreSQL
@@ -769,7 +800,13 @@ export async function isSessionRevokedInSupabase(sessionId: string): Promise<{ r
       .maybeSingle();
 
     if (error) {
-      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+      if (
+        error.code === '42P01' ||
+        error.code === 'PGRST205' ||
+        error.message?.includes('does not exist') ||
+        error.message?.includes('Could not find the table') ||
+        error.message?.includes('schema cache')
+      ) {
         return { revoked: false, isTableMissing: true };
       }
       // Error fatal de conexión o base de datos: FAIL-CLOSED en producción
@@ -810,7 +847,13 @@ export async function checkLoginRateLimitInSupabase(ip: string): Promise<{ allow
       .maybeSingle();
 
     if (error) {
-      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+      if (
+        error.code === '42P01' ||
+        error.code === 'PGRST205' ||
+        error.message?.includes('does not exist') ||
+        error.message?.includes('Could not find the table') ||
+        error.message?.includes('schema cache')
+      ) {
         return { allowed: true, isTableMissing: true };
       }
       // Error fatal de base de datos: FAIL-CLOSED
