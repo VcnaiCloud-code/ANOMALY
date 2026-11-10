@@ -17,6 +17,9 @@ import { createServer as createViteServer } from 'vite';
 
 import {
   isSupabaseConfigured,
+  getSanitizedSupabaseUrl,
+  sanitizeSupabaseUrl,
+  getSupabaseServerClient,
   getSoundItemsFromSupabase,
   getSoundItemByIdFromSupabase,
   upsertSoundItemInSupabase,
@@ -36,7 +39,9 @@ import {
   checkLoginRateLimitInSupabase,
   recordFailedLoginInSupabase,
   clearLoginAttemptsInSupabase,
-  createSignedUploadUrlInSupabase
+  createSignedUploadUrlInSupabase,
+  claimOrderForCaptureInSupabase,
+  releaseOrderClaimInSupabase
 } from './src/lib/supabaseServer';
 
 import {
@@ -137,12 +142,15 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
 // En desarrollo local sin Supabase: fallback seguro en memoria RAM (sin depender del disco local)
 const localRevokedSessions = new Set<string>();
 
-async function isSessionRevoked(sessionId: string): Promise<boolean> {
+async function isSessionRevoked(sessionId: string): Promise<{ revoked: boolean; error?: string }> {
   if (isSupabaseConfigured()) {
     const isRevokedInDb = await isSessionRevokedInSupabase(sessionId);
-    if (isRevokedInDb) return true;
+    if (isRevokedInDb.error) {
+      return { revoked: false, error: isRevokedInDb.error };
+    }
+    if (isRevokedInDb.revoked) return { revoked: true };
   }
-  return localRevokedSessions.has(sessionId);
+  return { revoked: localRevokedSessions.has(sessionId) };
 }
 
 async function persistRevokedSession(sessionId: string, expiresAt?: Date) {
@@ -160,9 +168,12 @@ interface LoginAttemptRecord {
 }
 const localLoginAttempts = new Map<string, LoginAttemptRecord>();
 
-async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number }> {
+async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number; isError?: boolean }> {
   if (isSupabaseConfigured()) {
     const dbCheck = await checkLoginRateLimitInSupabase(ip);
+    if (dbCheck.error) {
+      return { allowed: false, isError: true };
+    }
     if (!dbCheck.allowed) return dbCheck;
   }
 
@@ -260,7 +271,14 @@ async function verifyAdminSessionToken(token: string): Promise<{ valid: boolean;
       return { valid: false, error: 'Sesión administrativa expirada (máximo 8 horas de validez).' };
     }
 
-    if (await isSessionRevoked(payload.s)) {
+    const revocation = await isSessionRevoked(payload.s);
+    if (revocation.error && isProduction) {
+      return {
+        valid: false,
+        error: 'Fallo seguro: La base de datos central de seguridad no está disponible para validar la sesión.'
+      };
+    }
+    if (revocation.revoked) {
       return { valid: false, error: 'Sesión revocada previamente.' };
     }
 
@@ -545,7 +563,7 @@ async function startServer() {
 
         const signedRes = await createSignedUploadUrlInSupabase(bucket, storagePath);
         if (signedRes && signedRes.signedUrl) {
-          const supabaseUrl = process.env.SUPABASE_URL || '';
+          const supabaseUrl = getSanitizedSupabaseUrl();
           const publicUrl = kind === 'cover'
             ? `${supabaseUrl}/storage/v1/object/public/anomaly-covers/${storagePath}`
             : undefined;
@@ -585,6 +603,11 @@ async function startServer() {
         ? decodeURIComponent(req.headers['x-file-name'] as string)
         : 'stream_file';
       const kind = (req.headers['x-file-kind'] as string) || 'audio';
+      if (kind === 'audio' && isProduction) {
+        return res.status(403).json({
+          error: 'En producción los archivos master de audio no pueden almacenarse en disco local. Deben transferirse directamente al bucket privado anomaly-audio-masters.'
+        });
+      }
       const ext = path.extname(rawFileName).toLowerCase();
       const safeBaseName = path.basename(rawFileName, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
       const safeName = `${Date.now()}_${safeBaseName}${ext}`;
@@ -688,6 +711,21 @@ async function startServer() {
             });
           }
 
+          // Validar Magic Bytes en el buffer binario real recibido por el servidor
+          const magicCheck = validateFileMagicBytes(buffer, ext, 'audio');
+          if (!magicCheck.valid) {
+            return res.status(400).json({
+              error: `Firma binaria del archivo no válida: ${magicCheck.reason}`
+            });
+          }
+
+          // Deshabilitar fallback local de masters en producción
+          if (isProduction && !isSupabaseConfigured()) {
+            return res.status(503).json({
+              error: 'En producción los archivos master de audio no pueden almacenarse localmente. Configura Supabase Storage con el bucket privado anomaly-audio-masters.'
+            });
+          }
+
           // Determinar Content-Type limpio
           let resolvedContentType = 'audio/wav';
           if (ext === '.mp3') resolvedContentType = 'audio/mpeg';
@@ -712,7 +750,7 @@ async function startServer() {
             });
           }
 
-          // Modo local de desarrollo
+          // Modo local de desarrollo (únicamente fuera de producción)
           const localPath = path.join(AUDIO_UPLOADS_DIR, safeName);
           fs.writeFileSync(localPath, buffer);
           return res.json({
@@ -781,8 +819,10 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Serve uploaded files statically
-  app.use('/uploads/audio', express.static(AUDIO_UPLOADS_DIR));
+  // Serve uploaded files statically - ONLY covers in production, audio is NEVER served statically in production
+  if (!isProduction) {
+    app.use('/uploads/audio', express.static(AUDIO_UPLOADS_DIR));
+  }
   app.use('/uploads/covers', express.static(COVERS_UPLOADS_DIR));
 
   // --- ADMIN AUTH ROUTES ---
@@ -792,9 +832,15 @@ async function startServer() {
     const rateCheck = await checkLoginRateLimit(ip);
 
     if (!rateCheck.allowed) {
+      if (rateCheck.isError && isProduction) {
+        return res.status(503).json({
+          success: false,
+          error: 'Servicio de seguridad no disponible temporalmente. Inténtalo de nuevo más tarde.'
+        });
+      }
       return res.status(429).json({
         success: false,
-        error: `Demasiados intentos fallidos consecutivos. Acceso bloqueado temporalmente por seguridad. Inténtalo de nuevo en ${rateCheck.remainingSeconds} segundos.`
+        error: `Demasiados intentos fallidos consecutivos. Acceso bloqueado temporalmente por seguridad. Inténtalo de nuevo en ${rateCheck.remainingSeconds || 900} segundos.`
       });
     }
 
@@ -898,30 +944,43 @@ async function startServer() {
     if (isSupabaseConfigured()) {
       try {
         const supabaseItems = await getSoundItemsFromSupabase(false);
-        const formatted = supabaseItems.map((it) => ({
-          id: it.id,
-          section: it.section,
-          title: it.title,
-          category: it.category,
-          bpm: it.bpm,
-          key: it.key,
-          duration: it.duration,
-          format: it.format,
-          fileSize: it.file_size,
-          coverImage: it.cover_image,
-          audioUrl: it.audio_url,
-          audioStoragePath: it.audio_storage_path,
-          syntheticType: it.synthetic_type,
-          isFree: it.is_free,
-          price: it.price,
-          isPublished: it.is_published,
-          downloads: it.downloads,
-          description: it.description,
-          createdAt: it.created_at
-        }));
-        return res.json(formatted);
+        if (supabaseItems && supabaseItems.length > 0) {
+          const formatted = supabaseItems.map((it) => ({
+            id: it.id,
+            section: it.section,
+            title: it.title,
+            category: it.category,
+            bpm: it.bpm,
+            key: it.key,
+            duration: it.duration,
+            format: it.format,
+            fileSize: it.file_size,
+            coverImage: it.cover_image,
+            audioUrl: it.audio_url,
+            audioStoragePath: it.audio_storage_path,
+            syntheticType: it.synthetic_type,
+            isFree: it.is_free,
+            price: it.price,
+            isPublished: it.is_published,
+            downloads: it.downloads,
+            description: it.description,
+            createdAt: it.created_at
+          }));
+          return res.json(formatted);
+        }
+
+        // Si la tabla de Supabase aún no tiene registros (pendiente de migración),
+        // entregar el catálogo existente de catalog_db.json para que la web no quede en blanco
+        const localItems = readLocalDatabase();
+        const publishedOnly = localItems.filter((it) => it.isPublished !== false);
+        return res.json(publishedOnly);
       } catch (err: any) {
         console.error('Supabase public catalog query failed:', err.message);
+        const localItems = readLocalDatabase();
+        const publishedOnly = localItems.filter((it) => it.isPublished !== false);
+        if (publishedOnly.length > 0) {
+          return res.json(publishedOnly);
+        }
         return res.status(503).json({
           error: 'Error al consultar el catálogo en Supabase PostgreSQL. La base de datos no está disponible.',
           code: 'SUPABASE_UNAVAILABLE',
@@ -930,7 +989,7 @@ async function startServer() {
       }
     }
 
-    // Local dev mode fallback only when Supabase is not configured
+    // Modo local cuando Supabase no está configurado
     const items = readLocalDatabase();
     const publishedOnly = items.filter((it) => it.isPublished !== false);
     res.json(publishedOnly);
@@ -1014,6 +1073,34 @@ async function startServer() {
         downloads: 0,
         description: itemData.description || ''
       };
+
+      // Validar que el archivo master existe en el bucket privado anomaly-audio-masters y validar sus bytes reales
+      if (isSupabaseConfigured() && newItemPayload.audio_storage_path) {
+        const supabase = getSupabaseServerClient();
+        if (supabase) {
+          const { data: fileBlob, error: downloadErr } = await supabase.storage
+            .from('anomaly-audio-masters')
+            .download(newItemPayload.audio_storage_path);
+
+          if (downloadErr || !fileBlob) {
+            return res.status(400).json({
+              error: `El archivo master especificado no existe en el almacenamiento privado (anomaly-audio-masters): ${downloadErr?.message || ''}`
+            });
+          }
+
+          // Validar bytes reales del archivo descargado directamente de Supabase Storage
+          const arrayBuffer = await fileBlob.slice(0, 64).arrayBuffer();
+          const headBuffer = Buffer.from(arrayBuffer);
+          const ext = path.extname(newItemPayload.audio_storage_path).toLowerCase();
+          const magicCheck = validateFileMagicBytes(headBuffer, ext, 'audio');
+          if (!magicCheck.valid) {
+            await supabase.storage.from('anomaly-audio-masters').remove([newItemPayload.audio_storage_path]);
+            return res.status(400).json({
+              error: `Validación de seguridad fallida: Los bytes reales del archivo almacenado no corresponden a un formato ${ext} válido (${magicCheck.reason}).`
+            });
+          }
+        }
+      }
 
       if (isSupabaseConfigured()) {
         const saved = await upsertSoundItemInSupabase(newItemPayload);
@@ -1432,17 +1519,18 @@ async function startServer() {
         // FLUJO DE PRODUCCIÓN: SUPABASE POSTGRESQL
         // -----------------------------------------------------------------------
         if (isSupabaseConfigured()) {
-          const order = await getOrderFromSupabase(orderID);
-          if (!order) {
+          const claim = await claimOrderForCaptureInSupabase(orderID);
+
+          if (claim.status === 'NOT_FOUND') {
             return {
               status: 404,
               payload: { error: 'Orden no encontrada en la base de datos de órdenes.' }
             };
           }
 
-          // IDEMPOTENCIA REAL: Si la orden ya está COMPLETED, entregar el token existente
-          if (order.status === 'COMPLETED') {
-            const existingToken = await getDownloadTokenByOrderId(orderID);
+          // IDEMPOTENCIA PERSISTENTE: Si la orden ya está COMPLETED en PostgreSQL, entregar el token existente
+          if (claim.status === 'ALREADY_COMPLETED') {
+            const existingToken = claim.token || (await getDownloadTokenByOrderId(orderID));
             if (existingToken) {
               return {
                 status: 200,
@@ -1450,7 +1538,7 @@ async function startServer() {
                   success: true,
                   status: 'COMPLETED',
                   orderID,
-                  transactionId: order.paypal_capture_id,
+                  transactionId: claim.order?.paypal_capture_id,
                   downloadToken: existingToken.token,
                   downloadUrl: `/api/download/secure/${existingToken.token}`,
                   expiresAt: new Date(existingToken.expires_at).getTime(),
@@ -1460,6 +1548,36 @@ async function startServer() {
             }
           }
 
+          // EXCLUSIÓN MUTUA ENTRE INSTANCIAS: Si otra instancia de Cloud Run está procesando la captura, esperar a que finalice
+          if (claim.status === 'IN_PROGRESS') {
+            for (let i = 0; i < 4; i++) {
+              await new Promise((r) => setTimeout(r, 750));
+              const fresh = await getOrderFromSupabase(orderID);
+              if (fresh?.status === 'COMPLETED') {
+                const freshToken = await getDownloadTokenByOrderId(orderID);
+                if (freshToken) {
+                  return {
+                    status: 200,
+                    payload: {
+                      success: true,
+                      status: 'COMPLETED',
+                      orderID,
+                      transactionId: fresh.paypal_capture_id,
+                      downloadToken: freshToken.token,
+                      downloadUrl: `/api/download/secure/${freshToken.token}`,
+                      expiresAt: new Date(freshToken.expires_at).getTime()
+                    }
+                  };
+                }
+              }
+            }
+            return {
+              status: 409,
+              payload: { error: 'La orden está siendo procesada concurrentemente por otra instancia. Por favor, reintenta en unos instantes.' }
+            };
+          }
+
+          const order = claim.order!;
           const accessToken = await getPayPalAccessToken();
 
           // Comprobar estado en PayPal
@@ -1470,6 +1588,7 @@ async function startServer() {
           const checkData = await checkRes.json();
 
           if (!checkRes.ok) {
+            await releaseOrderClaimInSupabase(orderID);
             return {
               status: checkRes.status || 500,
               payload: { error: 'Error al consultar estado de la orden en PayPal.', details: checkData }
@@ -1481,6 +1600,7 @@ async function startServer() {
 
           // VALIDACIÓN 1: Verificar que la captura pertenece exactamente a la orden y producto de Supabase
           if (referenceId && referenceId !== order.item_id) {
+            await releaseOrderClaimInSupabase(orderID);
             return {
               status: 400,
               payload: {
@@ -1505,6 +1625,7 @@ async function startServer() {
               capturedCurrency !== order.currency ||
               Number(capturedAmount) !== Number(order.amount)
             ) {
+              await releaseOrderClaimInSupabase(orderID);
               return {
                 status: 400,
                 payload: {
@@ -1527,6 +1648,7 @@ async function startServer() {
 
             if (!captureResponse.ok || captureData.status !== 'COMPLETED') {
               console.error('PayPal capture error response:', captureData);
+              await releaseOrderClaimInSupabase(orderID);
               return {
                 status: captureResponse.status || 500,
                 payload: { error: 'Error de PayPal al capturar el pago.', details: captureData }
@@ -1545,6 +1667,7 @@ async function startServer() {
               capturedCurrency !== order.currency ||
               Number(capturedAmount) !== Number(order.amount)
             ) {
+              await releaseOrderClaimInSupabase(orderID);
               return {
                 status: 400,
                 payload: {
@@ -1555,6 +1678,7 @@ async function startServer() {
               };
             }
           } else {
+            await releaseOrderClaimInSupabase(orderID);
             return {
               status: 400,
               payload: {

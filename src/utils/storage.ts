@@ -786,11 +786,10 @@ export function setAdminToken(token: string | null): void {
 export function getStoredCatalogItems(): SoundItem[] {
   try {
     const raw = localStorage.getItem(CATALOG_ITEMS_KEY);
-    const hasInitialized = localStorage.getItem(CATALOG_INITIALIZED_KEY);
 
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed.map((it: SoundItem) => ({
           ...it,
           isPublished: it.isPublished ?? true
@@ -798,9 +797,9 @@ export function getStoredCatalogItems(): SoundItem[] {
       }
     }
 
-    return [];
+    return INITIAL_CATALOG_ITEMS;
   } catch {
-    return [];
+    return INITIAL_CATALOG_ITEMS;
   }
 }
 
@@ -851,16 +850,27 @@ export function deleteCatalogItem(id: string): void {
 export async function fetchPublicCatalogApi(): Promise<SoundItem[]> {
   try {
     const res = await fetch('/api/catalog');
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+
+    if (res.ok && contentType.includes('application/json')) {
       const data: SoundItem[] = await res.json();
-      saveStoredCatalogItems(data);
-      return data;
+      if (Array.isArray(data) && data.length > 0) {
+        saveStoredCatalogItems(data);
+        return data;
+      }
+      return getStoredCatalogItems();
     }
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData.error || `Error al conectar con el catálogo (HTTP ${res.status})`);
+
+    let errorMsg = `Error al conectar con el catálogo (HTTP ${res.status})`;
+    if (contentType.includes('application/json')) {
+      const errData = await res.json().catch(() => ({}));
+      if (errData.error) errorMsg = errData.error;
+    }
+    console.warn(`[CATALOG_SYNC] ${errorMsg}. Utilizando catálogo almacenado.`);
+    return getStoredCatalogItems();
   } catch (err: any) {
-    console.error('API /api/catalog error:', err.message);
-    throw err;
+    console.warn('[CATALOG_SYNC] Fallback a catálogo local:', err.message);
+    return getStoredCatalogItems();
   }
 }
 

@@ -44,7 +44,11 @@ export default function App() {
   const [catalogItems, setCatalogItems] = useState<SoundItem[]>(getStoredCatalogItems());
 
   useEffect(() => {
-    fetchPublicCatalogApi().then(setCatalogItems);
+    fetchPublicCatalogApi().then((items) => {
+      if (Array.isArray(items) && items.length > 0) {
+        setCatalogItems(items);
+      }
+    }).catch(() => {});
   }, []);
 
   // 3. Estados de interfaz

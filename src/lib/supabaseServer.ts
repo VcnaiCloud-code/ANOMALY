@@ -7,17 +7,34 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import path from 'path';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+export function sanitizeSupabaseUrl(url: string): string {
+  if (!url) return '';
+  let cleaned = url.trim();
+  cleaned = cleaned.replace(/\/+$/, '');
+  cleaned = cleaned.replace(/\/rest\/v1\/?$/, '');
+  cleaned = cleaned.replace(/\/(auth|storage)\/v1\/?$/, '');
+  cleaned = cleaned.replace(/\/+$/, '');
+  return cleaned;
+}
+
+export function getSanitizedSupabaseUrl(): string {
+  return sanitizeSupabaseUrl(process.env.SUPABASE_URL || '');
+}
+
+export function getSupabaseServiceRoleKey(): string {
+  return (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
 
 let supabaseClientInstance: SupabaseClient | null = null;
 
 export function isSupabaseConfigured(): boolean {
+  const url = getSanitizedSupabaseUrl();
+  const key = getSupabaseServiceRoleKey();
   return Boolean(
-    SUPABASE_URL &&
-    SUPABASE_SERVICE_ROLE_KEY &&
-    !SUPABASE_URL.includes('your-project') &&
-    !SUPABASE_SERVICE_ROLE_KEY.includes('your-service-role-key')
+    url &&
+    key &&
+    !url.includes('your-project') &&
+    !key.includes('your-service-role-key')
   );
 }
 
@@ -28,7 +45,9 @@ export function getSupabaseServerClient(): SupabaseClient | null {
 
   if (!supabaseClientInstance) {
     try {
-      supabaseClientInstance = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      const url = getSanitizedSupabaseUrl();
+      const key = getSupabaseServiceRoleKey();
+      supabaseClientInstance = createClient(url, key, {
         auth: {
           persistSession: false,
           autoRefreshToken: false
@@ -365,6 +384,122 @@ export async function saveOrderInSupabase(order: OrderRecord): Promise<boolean> 
   return true;
 }
 
+export async function claimOrderForCaptureInSupabase(
+  orderId: string
+): Promise<{
+  success: boolean;
+  status: 'CLAIMED' | 'ALREADY_COMPLETED' | 'IN_PROGRESS' | 'NOT_FOUND' | 'ERROR';
+  order?: OrderRecord;
+  token?: DownloadTokenRecord;
+  error?: string;
+}> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return { success: false, status: 'ERROR', error: 'Supabase no está configurado' };
+
+  try {
+    // 1. Intentar llamar a RPC claim_order_for_capture si la función existe en PostgreSQL
+    try {
+      const { data: rpcRes, error: rpcError } = await supabase.rpc('claim_order_for_capture', {
+        p_order_id: orderId
+      });
+
+      if (!rpcError && rpcRes && typeof rpcRes === 'object') {
+        if (rpcRes.already_completed) {
+          return {
+            success: true,
+            status: 'ALREADY_COMPLETED',
+            order: rpcRes.order as OrderRecord,
+            token: rpcRes.token as DownloadTokenRecord
+          };
+        }
+        if (rpcRes.success) {
+          return {
+            success: true,
+            status: 'CLAIMED',
+            order: rpcRes.order as OrderRecord
+          };
+        }
+      }
+    } catch {
+      // Continuar con control atómico estándar si la RPC aún no está creada
+    }
+
+    // 2. Comprobar si la orden existe en PostgreSQL
+    const order = await getOrderFromSupabase(orderId);
+    if (!order) {
+      return { success: false, status: 'NOT_FOUND', error: 'Orden no encontrada en la base de datos.' };
+    }
+
+    // Si ya está completada, recuperar inmediatamente la autorización existente
+    if (order.status === 'COMPLETED') {
+      const existingToken = await getDownloadTokenByOrderId(orderId);
+      return {
+        success: true,
+        status: 'ALREADY_COMPLETED',
+        order,
+        token: existingToken || undefined
+      };
+    }
+
+    // 3. Mecanismo de exclusión mutua persistente entre instancias de Cloud Run:
+    // Reservamos la captura actualizando captured_at de forma condicionada a que sea NULL y status CREATED
+    const claimTimestamp = new Date().toISOString();
+    const { data: claimed, error: claimErr } = await supabase
+      .from('orders')
+      .update({ captured_at: claimTimestamp })
+      .eq('order_id', orderId)
+      .eq('status', 'CREATED')
+      .is('captured_at', null)
+      .select()
+      .maybeSingle();
+
+    if (claimErr) {
+      return { success: false, status: 'ERROR', error: claimErr.message };
+    }
+
+    if (!claimed) {
+      // Otra instancia tomó el control de la captura; verificar si ya la completó
+      const freshOrder = await getOrderFromSupabase(orderId);
+      if (freshOrder?.status === 'COMPLETED') {
+        const token = await getDownloadTokenByOrderId(orderId);
+        return {
+          success: true,
+          status: 'ALREADY_COMPLETED',
+          order: freshOrder,
+          token: token || undefined
+        };
+      }
+      return {
+        success: false,
+        status: 'IN_PROGRESS',
+        error: 'La orden está siendo procesada concurrentemente por otra instancia.'
+      };
+    }
+
+    return {
+      success: true,
+      status: 'CLAIMED',
+      order: claimed as OrderRecord
+    };
+  } catch (err: any) {
+    return { success: false, status: 'ERROR', error: err.message };
+  }
+}
+
+export async function releaseOrderClaimInSupabase(orderId: string): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return;
+  try {
+    await supabase
+      .from('orders')
+      .update({ captured_at: null })
+      .eq('order_id', orderId)
+      .eq('status', 'CREATED');
+  } catch (err) {
+    console.warn('Aviso al liberar reserva de orden en Supabase:', err);
+  }
+}
+
 export async function getDownloadTokenByOrderId(orderId: string): Promise<DownloadTokenRecord | null> {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -375,6 +510,8 @@ export async function getDownloadTokenByOrderId(orderId: string): Promise<Downlo
     .from('download_tokens')
     .select('*')
     .eq('order_id', orderId)
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (error) {
@@ -415,13 +552,19 @@ export async function createDownloadTokenInSupabase(
   });
 
   if (error) {
-    // Si hubo un conflicto de clave única simultáneo, recuperar el token existente
+    // Si hubo un conflicto de clave única o inserción concurrente, recuperar el token canónico
     if (error.code === '23505' || error.message?.includes('duplicate key') || error.message?.includes('unique')) {
       const raceExisting = await getDownloadTokenByOrderId(orderId);
       if (raceExisting && raceExisting.token) {
         return { success: true, token: raceExisting.token };
       }
     }
+    // Reintentar consulta por si otra instancia insertó en milisegundo idéntico
+    const fallbackExisting = await getDownloadTokenByOrderId(orderId);
+    if (fallbackExisting && fallbackExisting.token) {
+      return { success: true, token: fallbackExisting.token };
+    }
+
     console.error('Error creating download token in Supabase:', error.message);
     throw new Error(`Error registrando token de descarga: ${error.message}`);
   }
@@ -614,9 +757,9 @@ export async function createSignedUploadUrlInSupabase(
 // SESIONES ADMINISTRATIVAS Y RATE LIMITING PERSISTENTE COMPARTIDO (PostgreSQL)
 // -----------------------------------------------------------------------------
 
-export async function isSessionRevokedInSupabase(sessionId: string): Promise<boolean> {
+export async function isSessionRevokedInSupabase(sessionId: string): Promise<{ revoked: boolean; error?: string; isTableMissing?: boolean }> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) return false;
+  if (!supabase) return { revoked: false, error: 'Supabase no está configurado' };
 
   try {
     const { data, error } = await supabase
@@ -626,11 +769,17 @@ export async function isSessionRevokedInSupabase(sessionId: string): Promise<boo
       .maybeSingle();
 
     if (error) {
-      return false;
+      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        return { revoked: false, isTableMissing: true };
+      }
+      // Error fatal de conexión o base de datos: FAIL-CLOSED en producción
+      console.error('Error crítico al consultar sesiones revocadas en Supabase:', error.message);
+      return { revoked: false, error: error.message };
     }
-    return Boolean(data);
-  } catch {
-    return false;
+    return { revoked: Boolean(data) };
+  } catch (err: any) {
+    console.error('Excepción crítica al consultar sesiones revocadas en Supabase:', err);
+    return { revoked: false, error: err.message };
   }
 }
 
@@ -649,7 +798,7 @@ export async function revokeSessionInSupabase(sessionId: string, expiresAt?: Dat
   }
 }
 
-export async function checkLoginRateLimitInSupabase(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number }> {
+export async function checkLoginRateLimitInSupabase(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number; error?: string; isTableMissing?: boolean }> {
   const supabase = getSupabaseServerClient();
   if (!supabase) return { allowed: true };
 
@@ -660,7 +809,16 @@ export async function checkLoginRateLimitInSupabase(ip: string): Promise<{ allow
       .eq('ip', ip)
       .maybeSingle();
 
-    if (error || !data) return { allowed: true };
+    if (error) {
+      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        return { allowed: true, isTableMissing: true };
+      }
+      // Error fatal de base de datos: FAIL-CLOSED
+      console.error('Error crítico al consultar rate limit en Supabase:', error.message);
+      return { allowed: false, error: error.message };
+    }
+
+    if (!data) return { allowed: true };
 
     const now = Date.now();
     if (data.blocked_until) {
@@ -685,8 +843,8 @@ export async function checkLoginRateLimitInSupabase(ip: string): Promise<{ allow
     }
 
     return { allowed: true };
-  } catch {
-    return { allowed: true };
+  } catch (err: any) {
+    return { allowed: false, error: err.message };
   }
 }
 
