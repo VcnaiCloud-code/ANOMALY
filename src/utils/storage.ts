@@ -142,259 +142,8 @@ export async function getStorageUsage(): Promise<{ usedMB: number; trackBlobsCou
 }
 
 // Real catalog data: Drum Kits, Sample Packs, and Bundles
-export const INITIAL_PRODUCTS: SoundProduct[] = [
-  // 1. FREE DRUM KIT
-  {
-    id: 'prod-inferno-free',
-    title: 'ANOMALY CORE 01',
-    subtitle: 'Essential Electronic & Urban Sound Kit',
-    coverImage: '/src/assets/images/pack_hyper_808_1793940338851.jpg',
-    type: 'drum_kit',
-    category: 'Drums & Percussion',
-    trackCount: 145,
-    totalSize: '185 MB',
-    formats: ['WAV', 'ZIP'],
-    isFree: true,
-    price: 0,
-    rating: 4.9,
-    downloads: 4890,
-    badge: 'GRATIS',
-    description: 'Colección de iniciación con kicks contundentes, 808s afinados, percusiones limpias y transitorios acústicos procesados para mezclas agresivas.',
-    tags: ['Drum Kit', 'Free', '808s', 'Kicks', 'WAV 24-bit'],
-    featured: true,
-    demoTrack: {
-      id: 'demo-anomaly-core',
-      title: 'Anomaly Core Demo Stem',
-      category: 'Drums & Percussion',
-      bpm: 140,
-      key: 'C Minor',
-      duration: 3.2,
-      format: 'WAV',
-      fileSize: '1.4 MB',
-      tags: ['808', 'Kick', 'Demo'],
-      waveformData: generateSyntheticWaveform(48, 1),
-      syntheticType: '808',
-      downloadCount: 4890,
-      playCount: 12400,
-      isFree: true,
-      author: 'ANOMALY SOUND',
-      createdAt: '2026-03-01'
-    },
-    tracks: [
-      {
-        id: 'inf-k-01',
-        title: 'Anomaly Sub Kick 01',
-        category: 'Drums & Percussion',
-        bpm: 140,
-        key: 'C',
-        duration: 0.6,
-        format: 'WAV',
-        fileSize: '420 KB',
-        tags: ['Kick', 'Punch'],
-        waveformData: generateSyntheticWaveform(32, 2),
-        syntheticType: 'kick',
-        downloadCount: 1200,
-        playCount: 3400,
-        isFree: true,
-        author: 'ANOMALY',
-        createdAt: '2026-03-01'
-      },
-      {
-        id: 'inf-s-01',
-        title: 'Anomaly Snare Crack',
-        category: 'Drums & Percussion',
-        bpm: 140,
-        key: 'F',
-        duration: 0.7,
-        format: 'WAV',
-        fileSize: '510 KB',
-        tags: ['Snare', 'Crisp'],
-        waveformData: generateSyntheticWaveform(32, 3),
-        syntheticType: 'snare',
-        downloadCount: 980,
-        playCount: 2900,
-        isFree: true,
-        author: 'ANOMALY',
-        createdAt: '2026-03-01'
-      }
-    ]
-  },
+export const INITIAL_PRODUCTS: SoundProduct[] = [];
 
-  // 2. PREMIUM DRUM KIT
-  {
-    id: 'prod-anomaly-deluxe',
-    title: 'ANOMALY DELUXE',
-    subtitle: 'Master Sound Kit + MIDIs & Textures',
-    coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
-    type: 'drum_kit',
-    category: 'Drums & Percussion',
-    trackCount: 420,
-    totalSize: '580 MB',
-    formats: ['WAV', 'AIFF', 'ZIP'],
-    isFree: false,
-    price: 9.99,
-    regularPrice: 19.99,
-    rating: 5.0,
-    downloads: 3420,
-    badge: 'DELUXE',
-    description: 'El arsenal definitivo de percusión moderna: más de 400 archivos de audio grabados a través de consolas SSL y saturadores Neve analógicos. Incluye stems completos y archivos MIDI.',
-    tags: ['Drum Kit', 'Deluxe', 'Hardware Processed', 'MIDIs'],
-    featured: true,
-    demoTrack: {
-      id: 'demo-anomaly-deluxe',
-      title: 'Anomaly Deluxe Demo Reel',
-      category: 'Drums & Percussion',
-      bpm: 144,
-      key: 'D Minor',
-      duration: 3.5,
-      format: 'WAV',
-      fileSize: '2.1 MB',
-      tags: ['Deluxe', 'Heavy Sub', 'Snare'],
-      waveformData: generateSyntheticWaveform(48, 4),
-      syntheticType: '808',
-      downloadCount: 3420,
-      playCount: 9800,
-      isFree: false,
-      price: 9.99,
-      author: 'ANOMALY SOUND',
-      createdAt: '2026-03-04'
-    },
-    tracks: []
-  },
-
-  // 3. SAMPLE PACK
-  {
-    id: 'prod-cyber-vocal',
-    title: 'CYBER VOCALS',
-    subtitle: 'Formant Loops & Granular Vocal Chops',
-    coverImage: '/src/assets/images/pack_cyber_vocal_1793940338724.jpg',
-    type: 'sample_pack',
-    category: 'Vocals & Chops',
-    trackCount: 180,
-    totalSize: '420 MB',
-    formats: ['WAV', 'ZIP'],
-    isFree: false,
-    price: 14.99,
-    regularPrice: 24.99,
-    rating: 4.8,
-    downloads: 2150,
-    badge: 'POPULAR',
-    description: 'Texturas vocales futuristas, frases granuladas procesadas con armonizadores estéreo, reverberaciones espaciales infinitas y modulación de formantes.',
-    tags: ['Vocal Chops', 'Atmosphere', 'Formant', 'Loops'],
-    featured: false,
-    demoTrack: {
-      id: 'demo-cyber-vocal',
-      title: 'Cyber Vocals Master Demo',
-      category: 'Vocals & Chops',
-      bpm: 135,
-      key: 'E Minor',
-      duration: 2.8,
-      format: 'WAV',
-      fileSize: '1.8 MB',
-      tags: ['Vocal', 'Chop', 'Granular'],
-      waveformData: generateSyntheticWaveform(48, 5),
-      syntheticType: 'vocal',
-      downloadCount: 2150,
-      playCount: 6700,
-      isFree: false,
-      price: 14.99,
-      author: 'ANOMALY SOUND',
-      createdAt: '2026-03-08'
-    },
-    tracks: []
-  },
-
-  // 4. SAMPLE PACK (ANALOG)
-  {
-    id: 'prod-analog-drift',
-    title: 'ANALOG DRIFT',
-    subtitle: 'Modular Synths & Melodic Stems',
-    coverImage: '/src/assets/images/pack_analog_drift_1793940338837.jpg',
-    type: 'sample_pack',
-    category: 'Melodies & Synths',
-    trackCount: 220,
-    totalSize: '650 MB',
-    formats: ['WAV', 'AIFF', 'ZIP'],
-    isFree: false,
-    price: 16.99,
-    regularPrice: 29.99,
-    rating: 4.9,
-    downloads: 1840,
-    badge: 'ANALOG GEAR',
-    description: 'Grabaciones directas de sintetizadores modulares eurorack y osciladores analógicos Prophet-6. Progresiones de acordes y arpegios ricos en armónicos.',
-    tags: ['Melodies', 'Modular', 'Synths', 'Analog Warmth'],
-    featured: false,
-    demoTrack: {
-      id: 'demo-analog-drift',
-      title: 'Analog Drift Modular Theme',
-      category: 'Melodies & Synths',
-      bpm: 124,
-      key: 'A Minor',
-      duration: 4.0,
-      format: 'WAV',
-      fileSize: '2.4 MB',
-      tags: ['Synth', 'Pad', 'Modular'],
-      waveformData: generateSyntheticWaveform(48, 6),
-      syntheticType: 'synth',
-      downloadCount: 1840,
-      playCount: 5400,
-      isFree: false,
-      price: 16.99,
-      author: 'ANOMALY SOUND',
-      createdAt: '2026-03-12'
-    },
-    tracks: []
-  },
-
-  // 5. BUNDLE PACK (ALL-IN-ONE)
-  {
-    id: 'prod-all-access-bundle',
-    title: 'ANOMALY ALL-ACCESS BUNDLE',
-    subtitle: 'The Complete Sound Discography Suite',
-    coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
-    type: 'bundle',
-    category: 'Drums & Percussion',
-    trackCount: 965,
-    totalSize: '1.8 GB',
-    formats: ['WAV', 'AIFF', 'ZIP'],
-    isFree: false,
-    price: 29.99,
-    regularPrice: 69.99,
-    rating: 5.0,
-    downloads: 1980,
-    badge: 'BUNDLE -60%',
-    description: 'Todo el catálogo de ANOMALY SOUND en un solo paquete masivo. Incluye Anomaly Deluxe, Cyber Vocals, Analog Drift, librerías secretas de 808s y acceso a futuras actualizaciones.',
-    tags: ['Bundle', 'Complete Suite', 'Discount', 'All Kits'],
-    includedItems: [
-      'Anomaly Deluxe Sound Suite (420 archivos)',
-      'Cyber Vocals Engine (180 archivos)',
-      'Analog Drift Modular Stems (220 archivos)',
-      'Secret 808s & Sub Transients Vault (145 archivos)',
-      'Licencia Comercial 100% Royalty Free de por vida'
-    ],
-    featured: true,
-    demoTrack: {
-      id: 'demo-bundle-showcase',
-      title: 'All-Access Showcase Mix',
-      category: 'Drums & Percussion',
-      bpm: 140,
-      key: 'F Minor',
-      duration: 3.8,
-      format: 'WAV',
-      fileSize: '2.6 MB',
-      tags: ['Bundle', 'Master', 'Mix'],
-      waveformData: generateSyntheticWaveform(48, 7),
-      syntheticType: 'riser',
-      downloadCount: 1980,
-      playCount: 7200,
-      isFree: false,
-      price: 29.99,
-      author: 'ANOMALY SOUND',
-      createdAt: '2026-03-15'
-    },
-    tracks: []
-  }
-];
 
 export function getStoredProducts(): SoundProduct[] {
   try {
@@ -565,198 +314,7 @@ export function recordDownloadStat(trackId: string, trackTitle: string) {
 // -------------------------------------------------------------
 import { SoundItem } from '../types/sound';
 
-export const INITIAL_CATALOG_ITEMS: SoundItem[] = [
-  // --- 1. ONE SHOTS ---
-  {
-    id: 'os-01',
-    section: 'one_shots',
-    title: 'SUB SEISMIC 808',
-    category: '808 Bass',
-    key: 'C',
-    duration: 3.2,
-    format: 'WAV 24-bit',
-    fileSize: '1.2 MB',
-    coverImage: '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
-    syntheticType: '808',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 3840,
-    description: 'Subgrave saturado analógicamente con armónicos de válvula y cola resonante limpia a 43Hz.',
-    createdAt: '2026-03-01'
-  },
-  {
-    id: 'os-02',
-    section: 'one_shots',
-    title: 'TITANIUM PUNCH KICK',
-    category: 'Kick',
-    key: 'F',
-    duration: 0.6,
-    format: 'WAV 24-bit',
-    fileSize: '480 KB',
-    coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
-    syntheticType: 'kick',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 4120,
-    description: 'Golpe contundente con caída rápida de tono y transitorio quirúrgico para cortar en la mezcla.',
-    createdAt: '2026-03-02'
-  },
-  {
-    id: 'os-03',
-    section: 'one_shots',
-    title: 'PRISM HARD SNARE',
-    category: 'Snare',
-    key: 'D',
-    duration: 0.7,
-    format: 'WAV 24-bit',
-    fileSize: '510 KB',
-    coverImage: '/src/assets/images/about_sculpture_1793942752249.jpg',
-    syntheticType: 'snare',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 2950,
-    description: 'Caja híbrida acústica-electrónica procesada a través de bus SSL 4000E con pegada metálica.',
-    createdAt: '2026-03-03'
-  },
-  {
-    id: 'os-04',
-    section: 'one_shots',
-    title: 'CARBON CLOSED HAT',
-    category: 'Hi-Hat',
-    key: 'F#',
-    duration: 0.35,
-    format: 'WAV 24-bit',
-    fileSize: '290 KB',
-    coverImage: '/src/assets/images/pack_hyper_808_1793940338851.jpg',
-    syntheticType: 'hihat',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 2180,
-    description: 'Hi-hat con micro-dinámica analógica y textura de cinta de media pulgada.',
-    createdAt: '2026-03-04'
-  },
-
-  // --- 2. BEATS ---
-  {
-    id: 'beat-01',
-    section: 'beats',
-    title: 'ECLIPSE',
-    category: 'Dark Heavy Beat',
-    bpm: 140,
-    key: 'D Minor',
-    duration: 5.0,
-    format: 'WAV 24-bit + Stems',
-    fileSize: '85 MB',
-    coverImage: '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
-    syntheticType: 'beat_dembow',
-    isFree: false,
-    price: 19.99,
-    isPublished: true,
-    downloads: 1480,
-    description: 'Beat pesado y oscuro con bajos saturados, transitorios rápidos y atmósfera futurista.',
-    createdAt: '2026-03-05'
-  },
-  {
-    id: 'beat-02',
-    section: 'beats',
-    title: 'CHRONOS',
-    category: 'Electronic Flow',
-    bpm: 130,
-    key: 'G# Minor',
-    duration: 5.0,
-    format: 'WAV 24-bit + Stems',
-    fileSize: '92 MB',
-    coverImage: '/src/assets/images/pack_dark_matter_1793940336960.jpg',
-    syntheticType: 'beat_trap',
-    isFree: false,
-    price: 19.99,
-    isPublished: true,
-    downloads: 1260,
-    description: 'Instrumental de precisión técnica con sintetizadores modulares y polirritmia.',
-    createdAt: '2026-03-06'
-  },
-  {
-    id: 'beat-03',
-    section: 'beats',
-    title: 'OVERDRIVE',
-    category: 'Bass Heavy Beat',
-    bpm: 96,
-    key: 'F Minor',
-    duration: 5.0,
-    format: 'WAV 24-bit + Stems',
-    fileSize: '78 MB',
-    coverImage: '/src/assets/images/pack_analog_drift_1793940338837.jpg',
-    syntheticType: 'beat_dembow',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 3640,
-    description: 'Beat con pegada sísmica, 0% regalías y descarga libre para creadores.',
-    createdAt: '2026-03-07'
-  },
-
-  // --- 3. SAMPLES ---
-  {
-    id: 'smp-01',
-    section: 'samples',
-    title: 'NEBULA MODULAR LOOP',
-    category: 'Melodic Synth Loop',
-    bpm: 124,
-    key: 'A Minor',
-    duration: 4.0,
-    format: 'WAV 24-bit',
-    fileSize: '18 MB',
-    coverImage: '/src/assets/images/pack_analog_drift_1793940338837.jpg',
-    syntheticType: 'synth',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 2890,
-    description: 'Secuencia melódica grabada en sintetizador Prophet-6 con modulaciones analógicas ricas.',
-    createdAt: '2026-03-08'
-  },
-  {
-    id: 'smp-02',
-    section: 'samples',
-    title: 'ETHER VOCAL TEXTURE',
-    category: 'Vocal Chop Loop',
-    bpm: 135,
-    key: 'E Minor',
-    duration: 2.8,
-    format: 'WAV 24-bit',
-    fileSize: '14 MB',
-    coverImage: '/src/assets/images/pack_cyber_vocal_1793940338724.jpg',
-    syntheticType: 'vocal',
-    isFree: true,
-    price: 0,
-    isPublished: true,
-    downloads: 3120,
-    description: 'Textura vocal con modulación de formantes, delays estéreo y microafinación espacial.',
-    createdAt: '2026-03-09'
-  },
-  {
-    id: 'smp-03',
-    section: 'samples',
-    title: 'ANALOG TAPE CHORDS',
-    category: 'Keys & Textures',
-    bpm: 128,
-    key: 'C Minor',
-    duration: 4.0,
-    format: 'WAV 24-bit',
-    fileSize: '22 MB',
-    coverImage: '/src/assets/images/about_sculpture_1793942752249.jpg',
-    syntheticType: 'synth',
-    isFree: true,
-    isPublished: true,
-    downloads: 2470,
-    description: 'Acordes pasados por cinta analógica Otari con saturación armónica y calidez.',
-    createdAt: '2026-03-10'
-  }
-];
+export const INITIAL_CATALOG_ITEMS: SoundItem[] = [];
 
 const CATALOG_ITEMS_KEY = 'anomaly_catalog_items_v2';
 const CATALOG_INITIALIZED_KEY = 'anomaly_catalog_has_initialized_v2';
@@ -789,7 +347,7 @@ export function getStoredCatalogItems(): SoundItem[] {
 
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed.map((it: SoundItem) => ({
           ...it,
           isPublished: it.isPublished ?? true
@@ -797,9 +355,9 @@ export function getStoredCatalogItems(): SoundItem[] {
       }
     }
 
-    return INITIAL_CATALOG_ITEMS;
+    return [];
   } catch {
-    return INITIAL_CATALOG_ITEMS;
+    return [];
   }
 }
 
@@ -854,7 +412,7 @@ export async function fetchPublicCatalogApi(): Promise<SoundItem[]> {
 
     if (res.ok && contentType.includes('application/json')) {
       const data: SoundItem[] = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
+      if (Array.isArray(data)) {
         saveStoredCatalogItems(data);
         return data;
       }
@@ -866,10 +424,10 @@ export async function fetchPublicCatalogApi(): Promise<SoundItem[]> {
       const errData = await res.json().catch(() => ({}));
       if (errData.error) errorMsg = errData.error;
     }
-    console.warn(`[CATALOG_SYNC] ${errorMsg}. Utilizando catálogo almacenado.`);
+    console.warn(`[CATALOG_SYNC] ${errorMsg}.`);
     return getStoredCatalogItems();
   } catch (err: any) {
-    console.warn('[CATALOG_SYNC] Fallback a catálogo local:', err.message);
+    console.warn('[CATALOG_SYNC] Error de conexión:', err.message);
     return getStoredCatalogItems();
   }
 }

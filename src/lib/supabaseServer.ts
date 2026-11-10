@@ -388,7 +388,7 @@ export async function claimOrderForCaptureInSupabase(
   orderId: string
 ): Promise<{
   success: boolean;
-  status: 'CLAIMED' | 'ALREADY_COMPLETED' | 'IN_PROGRESS' | 'NOT_FOUND' | 'ERROR';
+  status: 'CLAIMED' | 'ALREADY_COMPLETED' | 'IN_PROGRESS' | 'RECOVERY_NEEDED' | 'INVALID_STATUS' | 'NOT_FOUND' | 'ERROR';
   order?: OrderRecord;
   token?: DownloadTokenRecord;
   error?: string;
@@ -404,7 +404,7 @@ export async function claimOrderForCaptureInSupabase(
       });
 
       if (!rpcError && rpcRes && typeof rpcRes === 'object') {
-        if (rpcRes.already_completed) {
+        if (rpcRes.already_completed || rpcRes.status === 'ALREADY_COMPLETED') {
           return {
             success: true,
             status: 'ALREADY_COMPLETED',
@@ -417,6 +417,20 @@ export async function claimOrderForCaptureInSupabase(
             success: false,
             status: 'IN_PROGRESS',
             error: rpcRes.error || 'La orden está siendo procesada concurrentemente por otra instancia.'
+          };
+        }
+        if (rpcRes.status === 'RECOVERY_NEEDED') {
+          return {
+            success: true,
+            status: 'RECOVERY_NEEDED',
+            order: rpcRes.order as OrderRecord
+          };
+        }
+        if (rpcRes.status === 'INVALID_STATUS') {
+          return {
+            success: false,
+            status: 'INVALID_STATUS',
+            error: rpcRes.error || 'Estado de orden no válido para captura.'
           };
         }
         if (rpcRes.success) {
@@ -448,35 +462,45 @@ export async function claimOrderForCaptureInSupabase(
       };
     }
 
-    // Si captured_at está fijado y tiene menos de 45 segundos, otra instancia está procesando la captura
+    // Rechazar explícitamente órdenes en estados no capturables
+    if (['FAILED', 'REFUNDED', 'CANCELLED', 'VOIDED'].includes(order.status) || order.status !== 'CREATED') {
+      return {
+        success: false,
+        status: 'INVALID_STATUS',
+        error: `La orden está en estado inválido (${order.status}) para captura. Solo órdenes en estado CREATED pueden ser procesadas.`
+      };
+    }
+
+    // Si captured_at está fijado:
     if (order.captured_at) {
       const claimAge = Date.now() - new Date(order.captured_at).getTime();
-      if (claimAge < 45000) {
+      if (claimAge < 60000) {
         return {
           success: false,
           status: 'IN_PROGRESS',
           error: 'La orden está siendo procesada concurrentemente por otra instancia.'
         };
       }
+
+      // Reclamo antiguo >= 60s: worker previo interrumpido/caído. Requiere reconciliación con PayPal API
+      return {
+        success: true,
+        status: 'RECOVERY_NEEDED',
+        order
+      };
     }
 
-    // 3. Mecanismo de exclusión mutua persistente entre instancias de Cloud Run:
+    // 3. Mecanismo de exclusión mutua persistente entre instancias:
     // Reservamos la captura actualizando captured_at de forma condicionada
     const claimTimestamp = new Date().toISOString();
-    let claimQuery = supabase
+    const { data: claimed, error: claimErr } = await supabase
       .from('orders')
       .update({ captured_at: claimTimestamp })
       .eq('order_id', orderId)
-      .eq('status', 'CREATED');
-
-    if (order.captured_at) {
-      // Reclamar reserva expirada de un intento interrumpido
-      claimQuery = claimQuery.eq('captured_at', order.captured_at);
-    } else {
-      claimQuery = claimQuery.is('captured_at', null);
-    }
-
-    const { data: claimed, error: claimErr } = await claimQuery.select().maybeSingle();
+      .eq('status', 'CREATED')
+      .is('captured_at', null)
+      .select()
+      .maybeSingle();
 
     if (claimErr) {
       return { success: false, status: 'ERROR', error: claimErr.message };

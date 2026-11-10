@@ -45,7 +45,7 @@ export default function App() {
 
   useEffect(() => {
     fetchPublicCatalogApi().then((items) => {
-      if (Array.isArray(items) && items.length > 0) {
+      if (Array.isArray(items)) {
         setCatalogItems(items);
       }
     }).catch(() => {});

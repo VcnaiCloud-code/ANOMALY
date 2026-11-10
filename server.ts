@@ -143,6 +143,9 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
 const localRevokedSessions = new Set<string>();
 
 async function isSessionRevoked(sessionId: string): Promise<{ revoked: boolean; error?: string }> {
+  if (isProduction && !isSupabaseConfigured()) {
+    return { revoked: false, error: 'Supabase no está configurado en producción para validación de sesiones.' };
+  }
   if (isSupabaseConfigured()) {
     const isRevokedInDb = await isSessionRevokedInSupabase(sessionId);
     if (isRevokedInDb.error) {
@@ -172,6 +175,9 @@ interface LoginAttemptRecord {
 const localLoginAttempts = new Map<string, LoginAttemptRecord>();
 
 async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number; isError?: boolean }> {
+  if (isProduction && !isSupabaseConfigured()) {
+    return { allowed: false, isError: true };
+  }
   if (isSupabaseConfigured()) {
     const dbCheck = await checkLoginRateLimitInSupabase(ip);
     if (dbCheck.error) {
@@ -514,6 +520,65 @@ async function startServer() {
     }
 
     return { valid: false, reason: `Formato o extensión ${ext} no admitido para tipo ${kind}.` };
+  }
+
+  async function validateMasterInStorage(storagePath: string): Promise<{ valid: boolean; error?: string }> {
+    const supabase = getSupabaseServerClient();
+    if (!supabase) return { valid: false, error: 'Supabase no está conectado' };
+
+    try {
+      const normalized = storagePath.replace(/^\/+/, '');
+      const dir = path.dirname(normalized);
+      const base = path.basename(normalized);
+      const searchDir = dir === '.' ? '' : dir;
+
+      // 1. Verificar existencia y metadatos en el bucket sin descargar todo el archivo en memoria RAM
+      const { data: listData, error: listErr } = await supabase.storage
+        .from('anomaly-audio-masters')
+        .list(searchDir, { search: base, limit: 10 });
+
+      if (listErr) {
+        return { valid: false, error: `Error al consultar anomaly-audio-masters: ${listErr.message}` };
+      }
+
+      const fileMeta = listData?.find((item) => item.name === base);
+      if (!fileMeta) {
+        return { valid: false, error: `El archivo master especificado '${base}' no existe en el almacenamiento privado (anomaly-audio-masters).` };
+      }
+
+      const size = fileMeta.metadata?.size ?? 0;
+      if (size === 0) {
+        return { valid: false, error: 'El archivo master en el almacenamiento está vacío (0 bytes).' };
+      }
+      if (size > 500 * 1024 * 1024) {
+        return { valid: false, error: 'El archivo master excede el tamaño máximo permitido de 500 MB.' };
+      }
+
+      // 2. Descargar únicamente los primeros bytes para comprobación de magic bytes (slice de 64 bytes)
+      const { data: fileBlob, error: downloadErr } = await supabase.storage
+        .from('anomaly-audio-masters')
+        .download(storagePath);
+
+      if (downloadErr || !fileBlob) {
+        return { valid: false, error: `Error al leer archivo master: ${downloadErr?.message || 'archivo inaccesible'}` };
+      }
+
+      const arrayBuffer = await fileBlob.slice(0, 64).arrayBuffer();
+      const headBuffer = Buffer.from(arrayBuffer);
+      const ext = path.extname(storagePath).toLowerCase();
+      const magicCheck = validateFileMagicBytes(headBuffer, ext, 'audio');
+
+      if (!magicCheck.valid) {
+        return {
+          valid: false,
+          error: `Validación de seguridad fallida: Los bytes reales del archivo almacenado no corresponden a un formato ${ext} válido (${magicCheck.reason}).`
+        };
+      }
+
+      return { valid: true };
+    } catch (err: any) {
+      return { valid: false, error: `Error validando archivo master en almacenamiento: ${err.message}` };
+    }
   }
 
   // --- 1. SOLICITUD DE AUTORIZACIÓN Y URL FIRMADA (SUBIDA DIRECTA CLIENTE -> SUPABASE STORAGE) ---
@@ -968,48 +1033,36 @@ async function startServer() {
 
   // --- PUBLIC CATALOG ROUTE ---
   // When Supabase is configured, Supabase PostgreSQL is the SOLE authority.
-  // Never silently falls back to local demo data if Supabase fails.
+  // Never falls back to local demo data if database is empty or fails.
   app.get('/api/catalog', async (req: Request, res: Response) => {
     if (isSupabaseConfigured()) {
       try {
         const supabaseItems = await getSoundItemsFromSupabase(false);
-        if (supabaseItems && supabaseItems.length > 0) {
-          const formatted = supabaseItems.map((it) => ({
-            id: it.id,
-            section: it.section,
-            title: it.title,
-            category: it.category,
-            bpm: it.bpm,
-            key: it.key,
-            duration: it.duration,
-            format: it.format,
-            fileSize: it.file_size,
-            coverImage: it.cover_image,
-            audioUrl: it.audio_url,
-            audioStoragePath: it.audio_storage_path,
-            syntheticType: it.synthetic_type,
-            isFree: it.is_free,
-            price: it.price,
-            isPublished: it.is_published,
-            downloads: it.downloads,
-            description: it.description,
-            createdAt: it.created_at
-          }));
-          return res.json(formatted);
-        }
-
-        // Si la tabla de Supabase aún no tiene registros (pendiente de migración),
-        // entregar el catálogo existente de catalog_db.json para que la web no quede en blanco
-        const localItems = readLocalDatabase();
-        const publishedOnly = localItems.filter((it) => it.isPublished !== false);
-        return res.json(publishedOnly);
+        const formatted = (supabaseItems || []).map((it) => ({
+          id: it.id,
+          section: it.section,
+          title: it.title,
+          category: it.category,
+          bpm: it.bpm,
+          key: it.key,
+          duration: it.duration,
+          format: it.format,
+          fileSize: it.file_size,
+          coverImage: it.cover_image,
+          audioUrl: it.audio_url,
+          audioStoragePath: it.audio_storage_path,
+          syntheticType: it.synthetic_type,
+          isFree: it.is_free,
+          price: it.price,
+          isPublished: it.is_published,
+          downloads: it.downloads,
+          description: it.description,
+          createdAt: it.created_at
+        }));
+        // Devuelve exactamente el catálogo de PostgreSQL (incluso si está vacío [])
+        return res.json(formatted);
       } catch (err: any) {
         console.error('Supabase public catalog query failed:', err.message);
-        const localItems = readLocalDatabase();
-        const publishedOnly = localItems.filter((it) => it.isPublished !== false);
-        if (publishedOnly.length > 0) {
-          return res.json(publishedOnly);
-        }
         return res.status(503).json({
           error: 'Error al consultar el catálogo en Supabase PostgreSQL. La base de datos no está disponible.',
           code: 'SUPABASE_UNAVAILABLE',
@@ -1018,7 +1071,14 @@ async function startServer() {
       }
     }
 
-    // Modo local cuando Supabase no está configurado
+    if (isProduction) {
+      return res.status(503).json({
+        error: 'Supabase no está configurado en producción.',
+        code: 'SUPABASE_NOT_CONFIGURED'
+      });
+    }
+
+    // Modo local exclusivamente en desarrollo cuando Supabase no está configurado
     const items = readLocalDatabase();
     const publishedOnly = items.filter((it) => it.isPublished !== false);
     res.json(publishedOnly);
