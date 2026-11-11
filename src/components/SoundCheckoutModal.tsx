@@ -259,7 +259,7 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
       ? 'Beat Instrumental Master'
       : item.section === 'samples'
       ? 'Sample Loop Pack'
-      : 'One-Shot Kit';
+      : 'Librería Sound Kit';
 
   function handleDataSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -345,15 +345,16 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
 
           <div className="min-w-0 flex-1">
             <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 block truncate">
-              {productTypeLabel} · {item.category}
+              {productTypeLabel}{item.category ? ` · ${item.category}` : ''}
             </span>
             <h3 className="font-display font-black text-base text-white uppercase tracking-tight truncate">
               {item.title}
             </h3>
-            <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 mt-0.5">
+            <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 mt-0.5 flex-wrap">
               <span>{item.format}</span>
-              {item.bpm && <span>· {item.bpm} BPM</span>}
-              {item.key && <span>· Key {item.key}</span>}
+              {item.fileSize && <span>· {item.fileSize}</span>}
+              {Boolean(item.bpm && item.bpm > 0) && <span>· {item.bpm} BPM</span>}
+              {Boolean(item.key && item.key.trim()) && <span>· Key {item.key}</span>}
             </div>
           </div>
 

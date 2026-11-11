@@ -41,7 +41,12 @@ import {
   clearLoginAttemptsInSupabase,
   createSignedUploadUrlInSupabase,
   claimOrderForCaptureInSupabase,
-  releaseOrderClaimInSupabase
+  releaseOrderClaimInSupabase,
+  deleteFileFromStorage,
+  isAudioStoragePathUsedByOthers,
+  isCoverImageUsedByOthers,
+  getAllOrdersFromSupabase,
+  SoundItemRecord
 } from './src/lib/supabaseServer';
 
 import {
@@ -932,16 +937,19 @@ async function startServer() {
       });
     }
 
-    // EN PRODUCCIÓN: Prohibir cualquier contraseña predeterminada
-    if (isProduction && !process.env.ADMIN_PASSWORD) {
+    // EN PRODUCCIÓN: Prohibir cualquier contraseña predeterminada o placeholder
+    if (isProduction && (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'define_tu_clave_de_administrador_aqui')) {
       await recordFailedLogin(ip);
       return res.status(503).json({
         success: false,
-        error: 'Seguridad de producción: ADMIN_PASSWORD debe estar configurado en las variables de entorno.'
+        error: 'Seguridad de producción: ADMIN_PASSWORD debe estar configurado con una clave segura en las variables de entorno.'
       });
     }
 
-    const effectiveAdminPassword = ADMIN_PASSWORD || (!isProduction ? 'anomaly2026' : '');
+    const effectiveAdminPassword = (ADMIN_PASSWORD && ADMIN_PASSWORD !== 'define_tu_clave_de_administrador_aqui')
+      ? ADMIN_PASSWORD
+      : (!isProduction ? 'anomaly2026' : '');
+
     if (!effectiveAdminPassword) {
       await recordFailedLogin(ip);
       return res.status(503).json({
@@ -957,7 +965,15 @@ async function startServer() {
 
     const passBuf = Buffer.from(password);
     const expectedPassBuf = Buffer.from(effectiveAdminPassword);
-    const isPassValid = passBuf.length === expectedPassBuf.length && crypto.timingSafeEqual(passBuf, expectedPassBuf);
+    let isPassValid = passBuf.length === expectedPassBuf.length && crypto.timingSafeEqual(passBuf, expectedPassBuf);
+
+    // En desarrollo, también aceptar la contraseña configurada en env si difiere del default
+    if (!isPassValid && !isProduction && ADMIN_PASSWORD) {
+      const rawEnvBuf = Buffer.from(ADMIN_PASSWORD);
+      if (passBuf.length === rawEnvBuf.length && crypto.timingSafeEqual(passBuf, rawEnvBuf)) {
+        isPassValid = true;
+      }
+    }
 
     if (isPassValid && isEmailValid) {
       await clearLoginAttempts(ip);
@@ -973,6 +989,7 @@ async function startServer() {
 
       return res.json({
         success: true,
+        token: sessionToken,
         message: 'Sesión administrativa iniciada correctamente.',
         admin: { email: ADMIN_EMAIL, role: 'admin' }
       });
@@ -981,7 +998,7 @@ async function startServer() {
     await recordFailedLogin(ip);
     return res.status(401).json({
       success: false,
-      error: 'Credenciales de acceso no válidas. Acceso restringido exclusivamente al administrador.'
+      error: 'Credenciales de acceso no válidas.'
     });
   });
 
@@ -1137,7 +1154,7 @@ async function startServer() {
       const itemId = itemData.id || `item_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const title = itemData.title.toUpperCase();
       const section = itemData.section as 'one_shots' | 'beats' | 'samples';
-      const category = itemData.category || (section === 'one_shots' ? '808 Bass' : section === 'beats' ? 'Beat' : 'Sample Loop');
+      const category = (itemData.category || '').trim();
       const isFree = itemData.isFree ?? true;
       const price = isFree ? 0 : (itemData.price || 19.99);
       const isPublished = itemData.isPublished !== false;
@@ -1147,8 +1164,8 @@ async function startServer() {
         section,
         title,
         category,
-        bpm: itemData.bpm || null,
-        key: itemData.key || 'C Minor',
+        bpm: (itemData.bpm && Number(itemData.bpm) > 0) ? Number(itemData.bpm) : null,
+        key: (itemData.key || '').trim() || null,
         duration: itemData.duration || (section === 'one_shots' ? 0.8 : section === 'beats' ? 5.0 : 4.0),
         format: itemData.format || 'WAV 24-bit',
         file_size: itemData.fileSize || '12 MB',
@@ -1208,7 +1225,7 @@ async function startServer() {
         title,
         category,
         bpm: itemData.bpm,
-        key: newItemPayload.key,
+        key: newItemPayload.key || undefined,
         duration: newItemPayload.duration,
         format: newItemPayload.format,
         fileSize: newItemPayload.file_size,
@@ -1253,12 +1270,14 @@ async function startServer() {
           id,
           title: patch.title ? patch.title.toUpperCase() : existing.title,
           category: patch.category !== undefined ? patch.category : existing.category,
-          bpm: patch.bpm !== undefined ? patch.bpm : existing.bpm,
-          key: patch.key !== undefined ? patch.key : existing.key,
-          duration: patch.duration !== undefined ? patch.duration : existing.duration,
+          bpm: patch.bpm !== undefined ? (patch.bpm && Number(patch.bpm) > 0 ? Number(patch.bpm) : null) : existing.bpm,
+          key: patch.key !== undefined ? (patch.key ? String(patch.key).trim() : null) : existing.key,
+          duration: patch.duration !== undefined ? Number(patch.duration) : existing.duration,
           format: patch.format !== undefined ? patch.format : existing.format,
           file_size: patch.fileSize !== undefined ? patch.fileSize : existing.file_size,
           cover_image: patch.coverImage !== undefined ? patch.coverImage : existing.cover_image,
+          audio_url: patch.audioUrl !== undefined ? patch.audioUrl : existing.audio_url,
+          audio_storage_path: patch.audioStoragePath !== undefined ? patch.audioStoragePath : existing.audio_storage_path,
           is_free: patch.isFree !== undefined ? patch.isFree : existing.is_free,
           price: patch.price !== undefined ? patch.price : existing.price,
           is_published: patch.isPublished !== undefined ? patch.isPublished : existing.is_published,
@@ -1288,6 +1307,227 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error updating sound item:', err);
       return res.status(500).json({ error: 'Error al actualizar el sonido.', details: err.message });
+    }
+  });
+
+  // --- ADMIN ATOMIC FILE REPLACEMENT ROUTE ---
+  // Reemplaza audio master o portada de forma segura, atómica y sin alterar el ID ni metadatos del producto.
+  app.post('/api/admin/items/:id/replace-file', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { fileType, storagePath, publicUrl, fileSize, duration, format } = req.body;
+
+      if (!fileType || !['audio', 'cover'].includes(fileType)) {
+        return res.status(400).json({ error: 'fileType debe ser "audio" o "cover".' });
+      }
+      if (!storagePath && !publicUrl) {
+        return res.status(400).json({ error: 'Se requiere storagePath o publicUrl del archivo recién subido.' });
+      }
+
+      if (isSupabaseConfigured()) {
+        const existing = await getSoundItemByIdFromSupabase(id);
+        if (!existing) {
+          return res.status(404).json({ error: 'Producto no encontrado en Supabase.' });
+        }
+
+        if (fileType === 'audio') {
+          // 1. Validar atómicamente que el nuevo master existe en el bucket privado antes de tocar la BD
+          const newStoragePath = (storagePath || '').replace(/^\/+/, '');
+          const exists = await checkFileExistsInStorage('anomaly-audio-masters', newStoragePath);
+          if (!exists) {
+            return res.status(400).json({
+              error: `El nuevo archivo master no se encuentra en el bucket anomaly-audio-masters (${newStoragePath}). El producto conserva su archivo anterior intacto.`
+            });
+          }
+
+          const oldAudioPath = existing.audio_storage_path;
+
+          // 2. Actualizar registro en Supabase conservando id, título, precio, etc.
+          const patchPayload: Partial<SoundItemRecord> = {
+            id,
+            audio_storage_path: newStoragePath,
+            audio_url: publicUrl || existing.audio_url,
+            updated_at: new Date().toISOString()
+          };
+          if (fileSize) patchPayload.file_size = fileSize;
+          if (duration !== undefined && Number(duration) > 0) patchPayload.duration = Number(duration);
+          if (format) patchPayload.format = format;
+
+          const updated = await upsertSoundItemInSupabase(patchPayload);
+          if (!updated) {
+            return res.status(500).json({
+              error: 'Fallo al actualizar la referencia en la base de datos. El archivo anterior se mantiene.'
+            });
+          }
+
+          // 3. Limpieza segura: eliminar archivo anterior SOLO si existe, es diferente y ningún otro producto lo usa
+          if (oldAudioPath && oldAudioPath !== newStoragePath) {
+            const isUsedElsewhere = await isAudioStoragePathUsedByOthers(oldAudioPath, id);
+            if (!isUsedElsewhere) {
+              await deleteFileFromStorage('anomaly-audio-masters', oldAudioPath);
+            }
+          }
+
+          return res.json({
+            success: true,
+            message: 'Master de audio reemplazado con éxito.',
+            item: {
+              id: updated.id,
+              section: updated.section,
+              title: updated.title,
+              category: updated.category,
+              bpm: updated.bpm,
+              key: updated.key,
+              duration: updated.duration,
+              format: updated.format,
+              fileSize: updated.file_size,
+              coverImage: updated.cover_image,
+              audioUrl: updated.audio_url,
+              audioStoragePath: updated.audio_storage_path,
+              syntheticType: updated.synthetic_type,
+              isFree: updated.is_free,
+              price: updated.price,
+              isPublished: updated.is_published,
+              downloads: updated.downloads,
+              description: updated.description,
+              createdAt: updated.created_at,
+              updatedAt: updated.updated_at
+            }
+          });
+        } else {
+          // Reemplazo de portada visual
+          const oldCover = existing.cover_image;
+          const newCoverUrl = publicUrl || storagePath;
+
+          const updated = await upsertSoundItemInSupabase({
+            id,
+            cover_image: newCoverUrl,
+            updated_at: new Date().toISOString()
+          });
+
+          if (!updated) {
+            return res.status(500).json({ error: 'Fallo al actualizar la portada en la base de datos.' });
+          }
+
+          // Limpieza segura de portada anterior si estaba en anomaly-covers
+          if (oldCover && oldCover !== newCoverUrl && oldCover.includes('anomaly-covers')) {
+            const isCoverUsed = await isCoverImageUsedByOthers(oldCover, id);
+            if (!isCoverUsed) {
+              const coverPathMatch = oldCover.match(/anomaly-covers\/(.+)$/);
+              if (coverPathMatch && coverPathMatch[1]) {
+                await deleteFileFromStorage('anomaly-covers', coverPathMatch[1]);
+              }
+            }
+          }
+
+          return res.json({
+            success: true,
+            message: 'Portada reemplazada con éxito.',
+            item: {
+              id: updated.id,
+              section: updated.section,
+              title: updated.title,
+              category: updated.category,
+              bpm: updated.bpm,
+              key: updated.key,
+              duration: updated.duration,
+              format: updated.format,
+              fileSize: updated.file_size,
+              coverImage: updated.cover_image,
+              audioUrl: updated.audio_url,
+              audioStoragePath: updated.audio_storage_path,
+              syntheticType: updated.synthetic_type,
+              isFree: updated.is_free,
+              price: updated.price,
+              isPublished: updated.is_published,
+              downloads: updated.downloads,
+              description: updated.description,
+              createdAt: updated.created_at,
+              updatedAt: updated.updated_at
+            }
+          });
+        }
+      }
+
+      // Modo local de desarrollo sin Supabase
+      const items = readLocalDatabase();
+      const index = items.findIndex((it) => it.id === id);
+      if (index === -1) {
+        return res.status(404).json({ error: 'Producto no encontrado.' });
+      }
+
+      const existing = items[index];
+
+      if (fileType === 'audio') {
+        const oldAudioUrl = existing.audioUrl;
+        const newAudioUrl = publicUrl || (storagePath.startsWith('/') ? storagePath : `/uploads/audio/${path.basename(storagePath)}`);
+
+        const newLocalFile = path.basename(newAudioUrl);
+        const fullNewPath = path.join(AUDIO_UPLOADS_DIR, newLocalFile);
+        if (!fs.existsSync(fullNewPath) && !newAudioUrl.startsWith('http')) {
+          return res.status(400).json({ error: 'El archivo nuevo no se encuentra en el servidor local.' });
+        }
+
+        existing.audioUrl = newAudioUrl;
+        existing.audioStoragePath = storagePath;
+        if (fileSize) existing.fileSize = fileSize;
+        if (duration !== undefined && Number(duration) > 0) existing.duration = Number(duration);
+        if (format) existing.format = format;
+        existing.updatedAt = new Date().toISOString();
+
+        writeLocalDatabase(items);
+
+        // Limpieza de archivo antiguo si es seguro y no se usa en otros productos
+        if (oldAudioUrl && oldAudioUrl !== newAudioUrl && oldAudioUrl.startsWith('/uploads/audio/')) {
+          const isUsedByOther = items.some((it) => it.id !== id && it.audioUrl === oldAudioUrl);
+          if (!isUsedByOther) {
+            const oldFilePath = path.join(AUDIO_UPLOADS_DIR, path.basename(oldAudioUrl));
+            if (fs.existsSync(oldFilePath)) {
+              try { fs.unlinkSync(oldFilePath); } catch {}
+            }
+          }
+        }
+
+        return res.json({ success: true, message: 'Audio master reemplazado con éxito.', item: existing });
+      } else {
+        const oldCover = existing.coverImage;
+        const newCoverUrl = publicUrl || (storagePath.startsWith('/') ? storagePath : `/uploads/covers/${path.basename(storagePath)}`);
+
+        existing.coverImage = newCoverUrl;
+        existing.updatedAt = new Date().toISOString();
+        writeLocalDatabase(items);
+
+        if (oldCover && oldCover !== newCoverUrl && oldCover.startsWith('/uploads/covers/')) {
+          const isUsedByOther = items.some((it) => it.id !== id && it.coverImage === oldCover);
+          if (!isUsedByOther) {
+            const oldFilePath = path.join(COVERS_UPLOADS_DIR, path.basename(oldCover));
+            if (fs.existsSync(oldFilePath)) {
+              try { fs.unlinkSync(oldFilePath); } catch {}
+            }
+          }
+        }
+
+        return res.json({ success: true, message: 'Portada reemplazada con éxito.', item: existing });
+      }
+    } catch (err: any) {
+      console.error('Error in replace-file:', err);
+      return res.status(500).json({ error: 'Error al reemplazar archivo.', details: err.message });
+    }
+  });
+
+  // --- ADMIN ORDERS & SALES ROUTE ---
+  // Permite consultar historial completo de órdenes, montos, compradores y ventas en el panel
+  app.get('/api/admin/orders', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      if (isSupabaseConfigured()) {
+        const orders = await getAllOrdersFromSupabase();
+        return res.json(orders);
+      }
+      const localOrders = readLocalOrdersDatabase();
+      return res.json(localOrders);
+    } catch (err: any) {
+      console.error('Error in /api/admin/orders:', err);
+      return res.status(500).json({ error: 'Error al consultar órdenes.', details: err.message });
     }
   });
 
@@ -1382,47 +1622,47 @@ async function startServer() {
   // Safely identifies demo records by DEMO_ITEM_IDS, NEVER deletes real user products or files
   app.post('/api/admin/clear-demo-items', requireAdminAuth, async (req: Request, res: Response) => {
     try {
-      const { section } = req.body;
+      const { section, clearAll } = req.body;
 
       if (isSupabaseConfigured()) {
         const allItems = await getSoundItemsFromSupabase(true);
-        const demoItemsToDelete = allItems.filter((it) => {
-          if (!DEMO_ITEM_IDS.has(it.id)) return false;
+        const itemsToDelete = allItems.filter((it) => {
+          if (!clearAll && !DEMO_ITEM_IDS.has(it.id)) return false;
           if (section && section !== 'all' && it.section !== section) return false;
           return true;
         });
 
-        for (const demoItem of demoItemsToDelete) {
-          await deleteSoundItemFromSupabase(demoItem.id);
+        for (const item of itemsToDelete) {
+          await deleteSoundItemFromSupabase(item.id);
         }
 
         return res.json({
           success: true,
-          deletedCount: demoItemsToDelete.length,
-          message: `Se eliminaron ${demoItemsToDelete.length} registros de demostración sin tocar productos reales.`
+          deletedCount: itemsToDelete.length,
+          message: `Se eliminaron ${itemsToDelete.length} registros.`
         });
       }
 
       let items = readLocalDatabase();
-      const demoItemsToDelete = items.filter((it) => {
-        if (!DEMO_ITEM_IDS.has(it.id)) return false;
+      const itemsToDelete = items.filter((it) => {
+        if (!clearAll && !DEMO_ITEM_IDS.has(it.id)) return false;
         if (section && section !== 'all' && it.section !== section) return false;
         return true;
       });
 
-      const demoIdsSet = new Set(demoItemsToDelete.map((d) => d.id));
-      items = items.filter((it) => !demoIdsSet.has(it.id));
+      const idsSet = new Set(itemsToDelete.map((d) => d.id));
+      items = items.filter((it) => !idsSet.has(it.id));
       writeLocalDatabase(items);
 
       return res.json({
         success: true,
-        deletedCount: demoItemsToDelete.length,
+        deletedCount: itemsToDelete.length,
         remaining: items.length,
-        message: 'Registros de demostración eliminados permanentemente sin afectar productos reales.'
+        message: 'Registros eliminados correctamente.'
       });
     } catch (err: any) {
-      console.error('Error clearing demo items:', err);
-      return res.status(500).json({ error: 'Error al vaciar registros de demostración.', details: err.message });
+      console.error('Error clearing items:', err);
+      return res.status(500).json({ error: 'Error al vaciar registros.', details: err.message });
     }
   });
 

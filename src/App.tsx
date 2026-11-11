@@ -332,7 +332,7 @@ export default function App() {
               scrollToAnchor('one-shots');
             }}
           >
-            One Shots
+            Librerías
           </a>
           <a
             href="#beats"
@@ -441,39 +441,32 @@ export default function App() {
         </div>
       </section>
 
-      {/* ---------- 2. CATÁLOGO: ONE SHOTS ---------- */}
+      {/* ---------- 2. CATÁLOGO: LIBRERÍAS ---------- */}
       <section className="section" id="one-shots">
         <div className="wrap">
           <div className="section-head reveal">
             <div>
               <span className="eyebrow">Catálogo 01</span>
-              <h2 className="wide">One Shots</h2>
+              <h2 className="wide">Librerías</h2>
             </div>
-            <p>
-              Transitorios de ataque rápido, 808s afinados y cajas quirúrgicas procesadas en dominio analógico.
-            </p>
           </div>
 
           <div className="catalog-grid">
             {oneShots.length === 0 ? (
               <div className="col-span-full py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
-                Catálogo en actualización. Próximos lanzamientos disponibles pronto.
+                No hay librerías disponibles actualmente en el catálogo.
               </div>
             ) : oneShots.map((item) => {
-                const isCurrentPlaying = currentPlayingItem?.id === item.id && isPlaying;
+              const isCurrentPlaying = currentPlayingItem?.id === item.id && isPlaying;
+              const hasBpm = Boolean(item.bpm && item.bpm > 0);
+              const hasKey = Boolean(item.key && item.key.trim().length > 0);
 
               return (
                 <article key={item.id} className="catalog-card reveal">
                   <div className="space-y-4">
-                    {/* Artwork con elevación y resplandor al pasar el cursor */}
+                    {/* Artwork sin etiquetas técnicas */}
                     <div className="catalog-art">
                       <img src={item.coverImage} alt={item.title} loading="lazy" />
-                      <span className="kit-tag free">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z" />
-                        </svg>
-                        {item.category}
-                      </span>
                     </div>
 
                     <div className="space-y-2">
@@ -481,17 +474,17 @@ export default function App() {
                         {item.title}
                       </h3>
 
-                      <ul className="kit-facts">
-                        {item.key && <li>Key {item.key}</li>}
-                        {item.bpm && <li>{item.bpm} BPM</li>}
-                        <li>{item.format}</li>
-                        {item.fileSize && <li>{item.fileSize}</li>}
-                        {!item.isFree && item.price && <li>${item.price}</li>}
-                      </ul>
+                      {/* Solo tempo y nota musical cuando tengan un valor real */}
+                      {(hasBpm || hasKey) && (
+                        <ul className="kit-facts">
+                          {hasBpm && <li>{item.bpm} BPM</li>}
+                          {hasKey && <li>Key {item.key}</li>}
+                        </ul>
+                      )}
                     </div>
                   </div>
 
-                  {/* Acciones: Reproductor Individual y Descarga / Compra */}
+                  {/* Acciones: Preview y Descarga / Compra */}
                   <div className="pt-4 border-t border-white/[0.08] flex items-center justify-between gap-3">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
@@ -517,7 +510,7 @@ export default function App() {
                           <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
                         </svg>
                       </span>
-                      <span>Escuchar</span>
+                      <span>Preview</span>
                     </button>
 
                     {item.isFree ? (
@@ -529,7 +522,7 @@ export default function App() {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                           <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
                         </svg>
-                        <span>Descargar WAV</span>
+                        <span>Descargar</span>
                       </button>
                     ) : (
                       <button
@@ -537,7 +530,7 @@ export default function App() {
                         onClick={() => openCheckout(item)}
                         aria-label={`Comprar ${item.title}`}
                       >
-                        <span>Comprar (${item.price})</span>
+                        <span>Comprar</span>
                       </button>
                     )}
                   </div>
@@ -556,27 +549,23 @@ export default function App() {
               <span className="eyebrow">Catálogo 02</span>
               <h2 className="wide">Beats</h2>
             </div>
-            <p>
-              Producciones instrumentales completas con stems individuales y archivos WAV 24-bit multitrack.
-            </p>
           </div>
 
           <div className="catalog-grid">
             {beats.length === 0 ? (
               <div className="col-span-full py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
-                Catálogo en actualización. Próximos lanzamientos disponibles pronto.
+                No hay beats disponibles actualmente en el catálogo.
               </div>
             ) : beats.map((beat) => {
-                const isCurrentPlaying = currentPlayingItem?.id === beat.id && isPlaying;
+              const isCurrentPlaying = currentPlayingItem?.id === beat.id && isPlaying;
+              const hasBpm = Boolean(beat.bpm && beat.bpm > 0);
+              const hasKey = Boolean(beat.key && beat.key.trim().length > 0);
 
               return (
                 <article key={beat.id} className="catalog-card reveal">
                   <div className="space-y-4">
                     <div className="catalog-art">
                       <img src={beat.coverImage} alt={beat.title} loading="lazy" />
-                      <span className="kit-tag">
-                        {beat.category || 'Beat'}
-                      </span>
                     </div>
 
                     <div className="space-y-2">
@@ -584,13 +573,13 @@ export default function App() {
                         {beat.title}
                       </h3>
 
-                      <ul className="kit-facts">
-                        {beat.bpm && <li>{beat.bpm} BPM</li>}
-                        {beat.key && <li>Key {beat.key}</li>}
-                        <li>{beat.format}</li>
-                        {beat.fileSize && <li>{beat.fileSize}</li>}
-                        {!beat.isFree && beat.price && <li>${beat.price}</li>}
-                      </ul>
+                      {/* Solo tempo y nota musical cuando tengan un valor real */}
+                      {(hasBpm || hasKey) && (
+                        <ul className="kit-facts">
+                          {hasBpm && <li>{beat.bpm} BPM</li>}
+                          {hasKey && <li>Key {beat.key}</li>}
+                        </ul>
+                      )}
                     </div>
                   </div>
 
@@ -639,7 +628,7 @@ export default function App() {
                         onClick={() => openCheckout(beat)}
                         aria-label={`Comprar licencia de ${beat.title}`}
                       >
-                        <span>Comprar (${beat.price})</span>
+                        <span>Comprar</span>
                       </button>
                     )}
                   </div>
@@ -658,27 +647,23 @@ export default function App() {
               <span className="eyebrow">Catálogo 03</span>
               <h2 className="wide">Samples</h2>
             </div>
-            <p>
-              Loops melódicos, texturas vocales granuladas y progresiones de sintetizadores analógicos.
-            </p>
           </div>
 
           <div className="catalog-grid">
             {samples.length === 0 ? (
               <div className="col-span-full py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
-                Catálogo en actualización. Próximos lanzamientos disponibles pronto.
+                No hay samples disponibles actualmente en el catálogo.
               </div>
             ) : samples.map((sample) => {
-                const isCurrentPlaying = currentPlayingItem?.id === sample.id && isPlaying;
+              const isCurrentPlaying = currentPlayingItem?.id === sample.id && isPlaying;
+              const hasBpm = Boolean(sample.bpm && sample.bpm > 0);
+              const hasKey = Boolean(sample.key && sample.key.trim().length > 0);
 
               return (
                 <article key={sample.id} className="catalog-card reveal">
                   <div className="space-y-4">
                     <div className="catalog-art">
                       <img src={sample.coverImage} alt={sample.title} loading="lazy" />
-                      <span className="kit-tag">
-                        {sample.category || 'Sample Loop'}
-                      </span>
                     </div>
 
                     <div className="space-y-2">
@@ -686,13 +671,13 @@ export default function App() {
                         {sample.title}
                       </h3>
 
-                      <ul className="kit-facts">
-                        {sample.bpm && <li>{sample.bpm} BPM</li>}
-                        {sample.key && <li>Key {sample.key}</li>}
-                        <li>{sample.format}</li>
-                        {sample.fileSize && <li>{sample.fileSize}</li>}
-                        {!sample.isFree && sample.price && <li>${sample.price}</li>}
-                      </ul>
+                      {/* Solo tempo y nota musical cuando tengan un valor real */}
+                      {(hasBpm || hasKey) && (
+                        <ul className="kit-facts">
+                          {hasBpm && <li>{sample.bpm} BPM</li>}
+                          {hasKey && <li>Key {sample.key}</li>}
+                        </ul>
+                      )}
                     </div>
                   </div>
 
@@ -721,7 +706,7 @@ export default function App() {
                           <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
                         </svg>
                       </span>
-                      <span>Escuchar</span>
+                      <span>Preview</span>
                     </button>
 
                     {sample.isFree ? (
@@ -741,7 +726,7 @@ export default function App() {
                         onClick={() => openCheckout(sample)}
                         aria-label={`Comprar ${sample.title}`}
                       >
-                        <span>Comprar (${sample.price})</span>
+                        <span>Comprar</span>
                       </button>
                     )}
                   </div>
@@ -755,7 +740,21 @@ export default function App() {
       {/* ---------- FOOTER ---------- */}
       <footer>
         <div className="wrap">
-          <span>© 2026 ANOMALY SOUND · One Shots, Beats & Samples</span>
+          <div className="flex items-center gap-2">
+            <span>© 2026 ANOMALY SOUND · Librerías, Beats & Samples</span>
+            <a
+              href="/admin"
+              onClick={(e) => {
+                e.preventDefault();
+                window.history.pushState(null, '', '/admin');
+                setIsAdminPath(true);
+              }}
+              className="opacity-30 hover:opacity-100 text-[11px] font-mono transition-opacity ml-3"
+              title="Acceso administrativo"
+            >
+              Admin
+            </a>
+          </div>
           <div className="socials">
             <a href="https://instagram.com/anomalysound" target="_blank" rel="noopener noreferrer" aria-label="Instagram">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">

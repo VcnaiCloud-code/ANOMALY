@@ -24,6 +24,7 @@ export interface SoundItem {
   coverImage: string;
   audioBlobId?: string;
   audioUrl?: string;
+  audioStoragePath?: string;
   syntheticType?: '808' | 'kick' | 'snare' | 'hihat' | 'synth' | 'vocal' | 'riser' | 'beat_dembow' | 'beat_trap';
   isFree: boolean;
   price?: number;

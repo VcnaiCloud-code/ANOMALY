@@ -23,7 +23,7 @@ import {
 } from './supabaseServer';
 
 export const DEMO_ITEM_IDS = new Set([
-  'os-01', 'os-02', 'os-03',
+  'os-01', 'os-02', 'os-03', 'os-04',
   'beat-01', 'beat-02', 'beat-03',
   'smp-01', 'smp-02', 'smp-03'
 ]);

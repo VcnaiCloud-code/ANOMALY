@@ -341,6 +341,12 @@ export function setAdminToken(token: string | null): void {
   }
 }
 
+const DEMO_IDS = new Set([
+  'os-01', 'os-02', 'os-03', 'os-04',
+  'beat-01', 'beat-02', 'beat-03',
+  'smp-01', 'smp-02', 'smp-03'
+]);
+
 export function getStoredCatalogItems(): SoundItem[] {
   try {
     const raw = localStorage.getItem(CATALOG_ITEMS_KEY);
@@ -348,10 +354,12 @@ export function getStoredCatalogItems(): SoundItem[] {
     if (raw !== null) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map((it: SoundItem) => ({
-          ...it,
-          isPublished: it.isPublished ?? true
-        }));
+        return parsed
+          .filter((it: SoundItem) => it && !DEMO_IDS.has(it.id))
+          .map((it: SoundItem) => ({
+            ...it,
+            isPublished: it.isPublished ?? true
+          }));
       }
     }
 
@@ -434,8 +442,13 @@ export async function fetchPublicCatalogApi(): Promise<SoundItem[]> {
 
 export async function checkAdminSessionApi(): Promise<{ authenticated: boolean }> {
   try {
+    const token = getAdminToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/api/admin/session', {
-      credentials: 'same-origin'
+      credentials: 'include',
+      headers
     });
     if (res.ok) {
       setAdminSession(true);
@@ -449,11 +462,12 @@ export async function checkAdminSessionApi(): Promise<{ authenticated: boolean }
 }
 
 export async function fetchAdminCatalogApi(token?: string): Promise<SoundItem[]> {
+  const authToken = token || getAdminToken();
   const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
   const res = await fetch('/api/admin/catalog', {
-    credentials: 'same-origin',
+    credentials: 'include',
     headers
   });
   if (res.ok) {
@@ -465,18 +479,21 @@ export async function fetchAdminCatalogApi(token?: string): Promise<SoundItem[]>
   throw new Error(errData.error || `Error al obtener catálogo administrativo del servidor (HTTP ${res.status}).`);
 }
 
-export async function loginAdminApi(password: string, email?: string): Promise<{ success: boolean; error?: string }> {
+export async function loginAdminApi(password: string, email?: string): Promise<{ success: boolean; token?: string; error?: string }> {
   try {
     const res = await fetch('/api/admin/login', {
       method: 'POST',
-      credentials: 'same-origin',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password, email })
     });
     const data = await res.json();
     if (res.ok && data.success) {
       setAdminSession(true);
-      return { success: true };
+      if (data.token) {
+        setAdminToken(data.token);
+      }
+      return { success: true, token: data.token };
     }
     return { success: false, error: data.error || 'Credenciales incorrectas' };
   } catch (err: any) {
@@ -486,9 +503,14 @@ export async function loginAdminApi(password: string, email?: string): Promise<{
 
 export async function logoutAdminApi(): Promise<void> {
   try {
+    const token = getAdminToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     await fetch('/api/admin/logout', {
       method: 'POST',
-      credentials: 'same-origin'
+      credentials: 'include',
+      headers
     });
   } catch {
     // Ignore network error on logout
@@ -499,12 +521,13 @@ export async function logoutAdminApi(): Promise<void> {
 
 export async function saveItemApi(item: Partial<SoundItem>, token?: string): Promise<{ success: boolean; item?: SoundItem; error?: string }> {
   try {
+    const authToken = token || getAdminToken();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
     const res = await fetch('/api/admin/items', {
       method: 'POST',
-      credentials: 'same-origin',
+      credentials: 'include',
       headers,
       body: JSON.stringify(item)
     });
@@ -521,12 +544,13 @@ export async function saveItemApi(item: Partial<SoundItem>, token?: string): Pro
 
 export async function updateItemApi(id: string, patch: Partial<SoundItem>, token?: string): Promise<{ success: boolean; item?: SoundItem; error?: string }> {
   try {
+    const authToken = token || getAdminToken();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
     const res = await fetch(`/api/admin/items/${id}`, {
       method: 'PUT',
-      credentials: 'same-origin',
+      credentials: 'include',
       headers,
       body: JSON.stringify(patch)
     });
@@ -543,12 +567,13 @@ export async function updateItemApi(id: string, patch: Partial<SoundItem>, token
 
 export async function togglePublishApi(id: string, isPublished: boolean, token?: string): Promise<boolean> {
   try {
+    const authToken = token || getAdminToken();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
     const res = await fetch(`/api/admin/items/${id}/publish`, {
       method: 'PATCH',
-      credentials: 'same-origin',
+      credentials: 'include',
       headers,
       body: JSON.stringify({ isPublished })
     });
@@ -564,51 +589,103 @@ export async function togglePublishApi(id: string, isPublished: boolean, token?:
   return result ? result.isPublished : isPublished;
 }
 
-export async function deleteItemApi(id: string, token?: string): Promise<boolean> {
+export async function replaceItemFileApi(
+  id: string,
+  payload: {
+    fileType: 'audio' | 'cover';
+    storagePath?: string;
+    publicUrl?: string;
+    fileSize?: string;
+    duration?: number;
+    format?: string;
+  },
+  token?: string
+): Promise<{ success: boolean; item?: SoundItem; message?: string; error?: string }> {
   try {
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const authToken = token || getAdminToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
-    const res = await fetch(`/api/admin/items/${id}`, {
-      method: 'DELETE',
-      credentials: 'same-origin',
+    const res = await fetch(`/api/admin/items/${id}/replace-file`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success && data.item) {
+      updateCatalogItem(data.item);
+      return { success: true, item: data.item, message: data.message };
+    }
+    return { success: false, error: data.error || 'Error al reemplazar el archivo.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error de conexión al reemplazar archivo.' };
+  }
+}
+
+export async function fetchAdminOrdersApi(token?: string): Promise<any[]> {
+  try {
+    const authToken = token || getAdminToken();
+    const headers: Record<string, string> = {};
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+    const res = await fetch('/api/admin/orders', {
+      credentials: 'include',
       headers
     });
     if (res.ok) {
-      deleteCatalogItem(id);
-      return true;
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     }
+    return [];
   } catch (err) {
-    console.warn('Error deleting from server, deleting locally:', err);
+    console.warn('Error fetching orders:', err);
+    return [];
   }
-  deleteCatalogItem(id);
-  return true;
 }
 
-export async function clearDemoItemsApi(section: string, token?: string): Promise<boolean> {
-  try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+export async function deleteItemApi(id: string, token?: string): Promise<boolean> {
+  const authToken = token || getAdminToken();
+  const headers: Record<string, string> = {};
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
-    const res = await fetch('/api/admin/clear-demo-items', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers,
-      body: JSON.stringify({ section })
-    });
-    if (res.ok) {
-      const current = getStoredCatalogItems();
-      const updated = section === 'all' ? [] : current.filter((it) => it.section !== section);
-      saveStoredCatalogItems(updated);
-      return true;
-    }
-  } catch (err) {
-    console.warn('Error clearing items on server, clearing locally:', err);
+  const res = await fetch(`/api/admin/items/${id}`, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers
+  });
+
+  if (res.ok) {
+    deleteCatalogItem(id);
+    return true;
   }
-  const current = getStoredCatalogItems();
-  const updated = section === 'all' ? [] : current.filter((it) => it.section !== section);
-  saveStoredCatalogItems(updated);
-  return true;
+
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || `Error ${res.status} al eliminar el producto del servidor.`);
+}
+
+export async function clearDemoItemsApi(section: string, clearAll: boolean = true, token?: string): Promise<boolean> {
+  const authToken = token || getAdminToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+  const res = await fetch('/api/admin/clear-demo-items', {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ section, clearAll })
+  });
+
+  if (res.ok) {
+    const current = getStoredCatalogItems();
+    const updated = section === 'all' ? [] : current.filter((it) => it.section !== section);
+    saveStoredCatalogItems(updated);
+    return true;
+  }
+
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || `Error ${res.status} al vaciar los elementos.`);
 }
 
 export async function uploadFileApi(
@@ -632,14 +709,15 @@ export async function uploadFileApi(
     }
 
     // 2. Solicitar autorización y URL firmada de subida al servidor
+    const authToken = token || getAdminToken();
     const authHeaders: Record<string, string> = {
       'Content-Type': 'application/json'
     };
-    if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+    if (authToken) authHeaders['Authorization'] = `Bearer ${authToken}`;
 
     const authRes = await fetch('/api/admin/request-upload-signed-url', {
       method: 'POST',
-      credentials: 'same-origin',
+      credentials: 'include',
       headers: authHeaders,
       body: JSON.stringify({
         fileName: file.name,

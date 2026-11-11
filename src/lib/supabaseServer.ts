@@ -215,6 +215,56 @@ export async function deleteSoundItemFromSupabase(id: string): Promise<boolean> 
   return true;
 }
 
+export async function deleteFileFromStorage(bucket: string, storagePath: string): Promise<boolean> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase || !storagePath) return false;
+  try {
+    const { error } = await supabase.storage.from(bucket).remove([storagePath]);
+    if (error) {
+      console.warn(`[STORAGE] Aviso al eliminar ${storagePath} de ${bucket}:`, error.message);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn(`[STORAGE] Excepción al eliminar ${storagePath} de ${bucket}:`, err.message);
+    return false;
+  }
+}
+
+export async function isAudioStoragePathUsedByOthers(storagePath: string, excludeItemId: string): Promise<boolean> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase || !storagePath) return false;
+  try {
+    const { data, error } = await supabase
+      .from('sound_items')
+      .select('id')
+      .eq('audio_storage_path', storagePath)
+      .neq('id', excludeItemId)
+      .limit(1);
+    if (error) return false;
+    return Boolean(data && data.length > 0);
+  } catch {
+    return false;
+  }
+}
+
+export async function isCoverImageUsedByOthers(coverImage: string, excludeItemId: string): Promise<boolean> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase || !coverImage) return false;
+  try {
+    const { data, error } = await supabase
+      .from('sound_items')
+      .select('id')
+      .eq('cover_image', coverImage)
+      .neq('id', excludeItemId)
+      .limit(1);
+    if (error) return false;
+    return Boolean(data && data.length > 0);
+  } catch {
+    return false;
+  }
+}
+
 // -----------------------------------------------------------------------------
 // ALMACENAMIENTO: SUPABASE STORAGE (BUCKETS PRIVADOS Y PÚBLICOS)
 // -----------------------------------------------------------------------------
@@ -383,6 +433,28 @@ export async function saveOrderInSupabase(order: OrderRecord): Promise<boolean> 
   }
   return true;
 }
+
+export async function getAllOrdersFromSupabase(): Promise<OrderRecord[]> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(250);
+
+    if (error) {
+      console.error('Error fetching orders from Supabase:', error.message);
+      return [];
+    }
+    return (data || []) as OrderRecord[];
+  } catch (err: any) {
+    console.error('Exception fetching orders from Supabase:', err.message);
+    return [];
+  }
+}
+
 
 export async function claimOrderForCaptureInSupabase(
   orderId: string
