@@ -1,0 +1,1441 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<script>
+/* Links viejos del modal (koopersound.com/#drum-kits/inferno-demo) -> página propia del kit */
+(function(){
+  var pages = { 'inferno-demo':'/kits/inferno', 'inferno-full':'/kits/inferno-deluxe' };
+  var m = location.hash.match(/^#[a-z-]+\/([a-z-]+)$/);
+  if(m && pages[m[1]]) location.replace(pages[m[1]]);
+})();
+</script>
+<title>Kooper Sound — Drum Kits de Reggaetón Chileno | Inferno Gratis</title>
+<meta name="description" content="Kooper Sound: drum kits de reggaetón chileno del productor Kooper. Inferno gratis (293 archivos WAV + MIDI) e Inferno Deluxe (514 archivos). 0% regalías, descarga inmediata.">
+<meta name="author" content="Kooper">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://koopersound.com/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Kooper Sound">
+<meta property="og:locale" content="es_CL">
+<meta property="og:url" content="https://koopersound.com/">
+<meta property="og:title" content="Kooper Sound — Drum Kits de Reggaetón Chileno">
+<meta property="og:description" content="Drum kits de reggaetón chileno del productor Kooper. Descarga Inferno gratis: 293 archivos entre drum loops, kicks, snares, percusión, MIDIs y FX.">
+<meta property="og:image" content="https://koopersound.com/assets/img/inferno-full.jpg">
+<meta property="og:image:width" content="900">
+<meta property="og:image:height" content="900">
+<meta property="og:image:alt" content="Portada del drum kit Inferno Deluxe de Kooper Sound">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Kooper Sound — Drum Kits de Reggaetón Chileno">
+<meta name="twitter:description" content="Drum kits de reggaetón chileno del productor Kooper. Inferno gratis e Inferno Deluxe, 0% regalías.">
+<meta name="twitter:image" content="https://koopersound.com/assets/img/inferno-full.jpg">
+<meta name="twitter:image:alt" content="Portada del drum kit Inferno Deluxe de Kooper Sound">
+<link rel="alternate" type="text/plain" title="Resumen para IAs" href="https://koopersound.com/llms.txt">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://koopersound.com/#organization",
+      "name": "Kooper Sound",
+      "url": "https://koopersound.com",
+      "logo": "https://koopersound.com/assets/img/inferno-full.jpg",
+      "description": "Tienda online de drum kits de reggaetón chileno creados por el productor Kooper. Sonidos en WAV y MIDI, 0% regalías.",
+      "founder": {
+        "@id": "https://koopersound.com/#kooper"
+      },
+      "sameAs": [
+        "https://instagram.com/kooper_prod",
+        "https://www.beatstars.com/koopertracks",
+        "https://youtube.com/@koopertracks"
+      ],
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "ventas",
+        "url": "https://wa.me/5491124053906",
+        "availableLanguage": "es"
+      },
+      "knowsAbout": [
+        "reggaetón chileno",
+        "drum kits",
+        "producción musical",
+        "samples",
+        "MIDI"
+      ]
+    },
+    {
+      "@type": "Person",
+      "@id": "https://koopersound.com/#kooper",
+      "name": "Kooper",
+      "jobTitle": "Productor musical",
+      "description": "Productor musical de reggaetón chileno, creador de Kooper Sound.",
+      "worksFor": {
+        "@id": "https://koopersound.com/#organization"
+      },
+      "url": "https://koopersound.com",
+      "sameAs": [
+        "https://instagram.com/kooper_prod",
+        "https://www.beatstars.com/koopertracks",
+        "https://youtube.com/@koopertracks"
+      ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://koopersound.com/#website",
+      "name": "Kooper Sound",
+      "url": "https://koopersound.com",
+      "inLanguage": "es",
+      "publisher": {
+        "@id": "https://koopersound.com/#organization"
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://koopersound.com/#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "¿Qué es Kooper Sound?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Kooper Sound es la tienda de drum kits de reggaetón chileno del productor Kooper. Vende kits de sonidos en WAV y MIDI, 0% regalías, para productores de reggaetón y música urbana."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "¿Hay un drum kit de reggaetón chileno gratis?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Sí. Inferno es gratis a cambio de tu email: 293 archivos entre drum loops, kicks, snares, percusión, 20 MIDIs y FX (150 MB). Se descarga desde koopersound.com."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "¿Qué diferencia hay entre Inferno e Inferno Deluxe?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Inferno (gratis) trae 293 archivos. Inferno Deluxe es la versión completa de pago, con 514 archivos: 80+ drum loops, 180+ kicks, 100+ snares, 50 MIDIs y 104+ FX (315 MB)."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "¿Cómo se compra Inferno Deluxe?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "La compra se coordina por WhatsApp, desde el botón 'Comprar por WhatsApp' en koopersound.com."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "¿Los sonidos pagan regalías?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Todos los kits de Kooper Sound son 0% regalías (royalty free)."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/img/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
+<meta name="theme-color" content="#050507">
+<!-- sin JavaScript, el revelado al hacer scroll nunca se dispara: mostrar todo de entrada -->
+<noscript><style>.reveal{ opacity:1; transform:none; filter:none; }</style></noscript>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100,400;100,500;100,600;100,700;125,700;125,800;125,900&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Blanco y negro: el único color de la página está en las portadas de los kits. */
+  --bg:#050505;
+  --bg-2:#0b0b0c;
+  --bg-3:#141415;
+  --ink:#f5f5f5;
+  --ink-2:#b0b0b5;
+  --ink-3:#86868c;
+  --accent:#f5f5f5;        /* botones principales: blanco sólido */
+  --accent-rgb:255,255,255;
+  --silver:#c8cad0;        /* detalles: plata */
+  --silver-rgb:200,202,208;
+  --line:rgba(255,255,255,.09);
+  --pill:999px;
+  --maxw:75rem;
+  --hp:clamp(1.25rem,5vw,6rem);   /* margen lateral del hero */
+  --ease-out:cubic-bezier(.2,.8,.2,1);
+}
+*{ margin:0; padding:0; box-sizing:border-box; }
+html{ -webkit-tap-highlight-color:transparent; scroll-padding-top:5rem; }
+body{
+  background:var(--bg); color:var(--ink);
+  font:400 1rem/1.55 'Archivo', system-ui, sans-serif; font-stretch:100%;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+body.sheet-open{ overflow:hidden; }
+a{ color:inherit; text-decoration:none; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+img{ display:block; max-width:100%; }
+:focus-visible{ outline:2px solid var(--silver); outline-offset:3px; }
+.wide{ font-stretch:125%; }
+.wrap{ max-width:var(--maxw); margin:0 auto; padding:0 1.25rem; }
+.sr-only{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+.eyebrow{ font-size:.75rem; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:var(--silver); }
+
+/* ---------- botones (respuesta al presionar, hover solo con mouse) ---------- */
+.btn{
+  position:relative; overflow:hidden; isolation:isolate;
+  display:inline-flex; align-items:center; justify-content:center; gap:.6rem;
+  height:3.25rem; padding:0 1.6rem; border-radius:var(--pill);
+  font-weight:700; font-size:.95rem; white-space:nowrap;
+  transition:transform .25s var(--ease-out), background-color .2s, color .2s, border-color .2s;
+}
+.btn:active{ transform:scale(.96); transition-duration:60ms; }
+.btn-white{ background:var(--ink); color:#0a0a0c; }
+.btn-red{ background:var(--accent); color:#0a0a0c; }
+/* destello que cruza el botón al pasar el mouse, como la luz sobre un diamante */
+.btn-white::after, .btn-red::after{
+  content:''; position:absolute; inset:0; z-index:-1; pointer-events:none;
+  background:linear-gradient(110deg, transparent 30%, rgba(160,165,180,.45) 50%, transparent 70%);
+  transform:translateX(-120%);
+}
+@media (hover:hover){
+  .btn-white:hover::after, .btn-red:hover::after{ transform:translateX(120%); transition:transform .7s var(--ease-out); }
+}
+.btn-glass{ background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.16); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
+.btn-sm{ height:2.5rem; padding:0 1.1rem; font-size:.85rem; }
+.btn svg{ width:1.05em; height:1.05em; flex-shrink:0; }
+@media (hover:hover){
+  .btn-white:hover{ background:#fff; }
+  .btn-red:hover, .btn-white:hover{ background:#fff; }
+  .btn-glass:hover{ background:rgba(255,255,255,.14); }
+  .arrow-link:hover svg{ transform:translateX(4px); }
+}
+.arrow-link{ display:inline-flex; align-items:center; gap:.5rem; font-weight:600; font-size:.95rem; padding:.75rem 0; margin:-.75rem 0; } /* toque de 44 px de alto */
+.arrow-link svg{ width:1rem; height:1rem; transition:transform .25s var(--ease-out); }
+
+/* links de texto: responden al tocar, igual que los botones */
+.nav a:active, .arrow-link:active, .crumbs a:active, .crumbs-about:active, .link-pad:active, .kit-name:active, .about-text p a:active, .guide-body p a:active{ opacity:.55; transition:opacity 60ms; }
+
+/* botones de DESCARGA: blanco hielo con un leve azul de diamante, para que se distingan de "Comprar" y del resto */
+.btn-dl{
+  background:linear-gradient(180deg, #eaf3ff 0%, #bfd6f3 100%); color:#0a1830;
+  box-shadow:0 0 0 1px rgba(190,218,255,.85), 0 10px 30px -9px rgba(120,175,255,.7), inset 0 1px 0 rgba(255,255,255,.9);
+}
+.btn-dl::after{ background:linear-gradient(110deg, transparent 30%, rgba(255,255,255,.95) 50%, transparent 70%); }
+@media (hover:hover){
+  .btn-dl:hover{ background:linear-gradient(180deg, #f4f9ff 0%, #cde0f8 100%); box-shadow:0 0 0 1px rgba(205,228,255,.95), 0 14px 36px -9px rgba(120,175,255,.85), inset 0 1px 0 #fff; }
+}
+
+/* ---------- header: transparente sobre la foto, vidrio al bajar ---------- */
+.header{
+  position:fixed; inset:0 0 auto 0; z-index:50;
+  display:flex; align-items:center; justify-content:space-between; gap:1rem;
+  padding:.85rem var(--hp); padding-top:max(.85rem, env(safe-area-inset-top));
+  transition:background-color .3s;
+}
+.header::after{ /* borde difuso en vez de una línea dura */
+  content:''; position:absolute; left:0; right:0; bottom:-1.5rem; height:1.5rem; pointer-events:none;
+  background:linear-gradient(rgba(5,5,7,.55), transparent); opacity:0; transition:opacity .3s;
+}
+.header.scrolled{ background:rgba(5,5,7,.62); backdrop-filter:blur(20px) saturate(160%); -webkit-backdrop-filter:blur(20px) saturate(160%); }
+.header.scrolled::after{ opacity:1; }
+.logo{ display:flex; align-items:center; gap:.7rem; font-weight:800; font-stretch:125%; font-size:.95rem; line-height:1; letter-spacing:.02em; }
+.logo-k{ position:relative; flex-shrink:0; transform:translateY(calc((.3rem + .76rem) / 2 - 1px)); }
+.logo-k .twinkle.a{ top:-.3rem; right:-.3rem; animation-duration:5s; }
+.logo img{ width:2.6rem; height:2.6rem; border-radius:.7rem; object-fit:cover; box-shadow:0 0 0 1px rgba(255,255,255,.12), 0 6px 18px -6px rgba(255,255,255,.25); }
+.logo-name{ position:relative; white-space:nowrap; }
+/* teléfonos muy angostos (320 px): logo y redes un poco más compactos para que entren en una línea */
+@media (max-width:23rem){
+  .header{ gap:.5rem; }
+  .logo{ font-size:.82rem; gap:.55rem; }
+  .logo img{ width:2.3rem; height:2.3rem; }
+  .logo small{ font-size:.66rem; }
+  .header-social{ gap:.25rem; }
+  .header-social a{ width:2.2rem; height:2.2rem; }
+  .header-social a::before{ inset:-.3rem; }
+}
+.logo small{ position:absolute; left:0; top:100%; margin-top:.3rem; white-space:nowrap; font-weight:600; font-size:.76rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink); opacity:.72; font-stretch:100%; }
+.nav{ display:flex; gap:2rem; }
+.nav a{ position:relative; font-size:.9rem; font-weight:500; color:var(--ink-2); padding:.3rem 0; transition:color .2s; }
+.nav a::after{ content:''; position:absolute; left:0; right:0; bottom:-.15rem; height:2px; border-radius:2px; background:var(--ink); transform:scaleX(0); transition:transform .3s var(--ease-out); }
+.nav a.active{ color:var(--ink); }
+.nav a.active::after{ transform:scaleX(1); }
+@media (hover:hover){ .nav a:hover{ color:var(--ink); } }
+/* redes arriba a la derecha, a la misma altura que la K del logo */
+.header-right{ position:relative; top:calc((.3rem + .76rem) / 2 - 1px); display:flex; align-items:center; justify-content:flex-end; }
+.header-social{ display:flex; gap:.4rem; transition:opacity .25s var(--ease-out), transform .3s var(--ease-out), filter .25s; }
+.header-social a{
+  width:2.4rem; height:2.4rem; border-radius:50%; display:grid; place-items:center; color:var(--ink-2);
+  border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.04);
+  transition:color .2s, border-color .2s, background-color .2s, transform .25s var(--ease-out);
+}
+.header-social a:active{ transform:scale(.9); transition-duration:60ms; }
+.header-social svg{ width:1.1rem; height:1.1rem; }
+.header-social a{ position:relative; }
+.header-social a::before{ content:''; position:absolute; inset:-.2rem; }   /* área de toque de 46 px */
+@media (hover:hover){ .header-social a:hover{ color:var(--ink); border-color:rgba(255,255,255,.35); background:rgba(255,255,255,.08); } }
+/* cuando aparece "Inferno gratis", ocupa el lugar de las redes (siguen en el pie de página) */
+.header.cta-on .header-social{ opacity:0; transform:scale(.9); filter:blur(4px); pointer-events:none; }
+/* atajo al kit gratis: aparece recién cuando el botón grande del inicio ya no se ve */
+.header-cta{
+  /* mismo centro que la K del logo; se superpone al lugar de las redes */
+  position:absolute; right:0; top:50%; margin-top:-1.3rem;
+  display:flex; align-items:center; gap:.6rem; height:2.6rem; padding:0 1.1rem 0 .3rem; border-radius:var(--pill);
+  background:linear-gradient(180deg, #eaf3ff 0%, #bfd6f3 100%); color:#0a1830; font-weight:700; font-size:.82rem; white-space:nowrap;
+  box-shadow:0 0 0 1px rgba(190,218,255,.85), 0 8px 24px -9px rgba(120,175,255,.7);
+  opacity:0; transform:scale(.9); filter:blur(4px); pointer-events:none;
+  transition:opacity .3s var(--ease-out), transform .35s var(--ease-out), filter .3s;
+}
+.header-cta img{ width:2rem; height:2rem; border-radius:50%; object-fit:cover; background:#111113; flex-shrink:0; }
+.header-cta-label{ line-height:1; font-weight:800; letter-spacing:.005em; }
+.header-cta.show{ opacity:1; transform:none; filter:none; pointer-events:auto; }
+.header-cta:active{ transform:scale(.95); transition-duration:60ms; }
+@media (max-width:52rem){ .nav{ display:none; } }
+/* teléfonos angostos: el nombre y las redes no se tocan (va después de las reglas base para que se aplique) */
+@media (max-width:24rem){ .logo-name{ font-stretch:100%; } }
+@media (max-width:23rem){ .header-social{ gap:.25rem; } .header-social a{ width:2.2rem; height:2.2rem; } .logo small{ font-size:.66rem; } }
+
+/* ---------- hero: foto del artista y texto separados, sin encimarse ---------- */
+.hero{ position:relative; background:radial-gradient(ellipse 60% 55% at 78% 40%, rgba(255,255,255,.05), transparent 70%), var(--bg); }
+.hero-media{ position:relative; overflow:hidden; touch-action:pan-y; user-select:none; -webkit-user-select:none; cursor:grab; }
+.hero-media.dragging{ cursor:grabbing; }
+.hero-track{ display:flex; height:100%; will-change:transform; }
+.slide{ position:relative; flex:0 0 100%; height:100%; }
+.slide img{ width:100%; height:100%; object-fit:cover; pointer-events:none; }
+.hero-text{ container-type:inline-size; }
+.hero h1{ margin:.9rem 0 1.2rem; text-transform:uppercase; font-weight:900; font-stretch:125%; line-height:.88; letter-spacing:-.035em; }
+.hero h1 .l1{ display:block; font-size:5.6cqi; font-weight:800; letter-spacing:-.02em; margin-bottom:.4rem; color:var(--ink-2); }
+.hero h1 .l2, .hero h1 .l3{ display:block; font-size:12.6cqi; } /* "REGGAETÓN" siempre cabe en su columna */
+.hero h1 .l3{ color:#d9d9de; }
+@supports ((background-clip:text) or (-webkit-background-clip:text)){
+  .hero h1 .l3{
+    background:linear-gradient(180deg, #ffffff 0%, #e4e4e8 38%, #8d8d95 52%, #f1f1f4 64%, #b9b9c0 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent; -webkit-text-fill-color:transparent;
+  }
+}
+.hero-sub{ max-width:27rem; font-size:1.05rem; line-height:1.55; color:var(--ink-2); }
+.hero-actions{ margin-top:1.8rem; display:flex; gap:1rem 1.4rem; align-items:center; flex-wrap:wrap; }
+.hero-controls{ display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.dots{ display:flex; gap:.45rem; }
+.dot{ height:.5rem; width:.5rem; border-radius:var(--pill); background:rgba(255,255,255,.3); padding:0; position:relative; overflow:hidden; }
+.dot::before{ content:''; position:absolute; inset:-.75rem -.3rem; } /* área de toque más grande */
+.dot span{ position:absolute; inset:0; border-radius:inherit; background:#fff; opacity:0; }
+.swipe-hint{ font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); display:flex; align-items:center; gap:.5rem; transition:opacity .3s; }
+.swipe-hint svg{ width:1rem; height:1rem; }
+
+/* celular: foto arriba, texto abajo */
+@media (max-width:52rem){
+  .hero{ display:flex; flex-direction:column; min-height:calc(100vh - var(--tick)); min-height:calc(100svh - var(--tick)); }
+  .hero-media{
+    flex:1 1 0; height:auto; min-height:12rem;
+    -webkit-mask-image:linear-gradient(to bottom, #000 62%, transparent 100%); mask-image:linear-gradient(to bottom, #000 62%, transparent 100%);
+  }
+  .slide img{ object-position:50% 22%; }
+  .hero-content{ padding:0 1.25rem 1.6rem; }
+  .hero-controls{ margin:-.5rem 0 1.4rem; }
+  .hero-sub{ font-size:.98rem; }
+}
+/* teléfonos bajitos (iPhone SE): sin la bajada, para que la cinta igual se vea al entrar */
+@media (max-width:52rem) and (max-height:720px){
+  .hero-sub{ display:none; }
+  .hero h1{ margin-bottom:.4rem; }
+}
+/* compu: texto a la izquierda, foto a la derecha; la columna del texto termina antes de que empiece la foto */
+@media (min-width:52.01rem){
+  .hero{ height:calc(100vh - var(--tick)); height:calc(100svh - var(--tick)); min-height:36rem; max-height:58rem; }
+  .hero-media{
+    position:absolute; top:0; right:0; bottom:0; width:54%;
+    -webkit-mask-image:linear-gradient(to right, transparent 0%, #000 26%), linear-gradient(to top, transparent 0%, #000 16%);
+    -webkit-mask-composite:source-in;
+    mask-image:linear-gradient(to right, transparent 0%, #000 26%), linear-gradient(to top, transparent 0%, #000 16%);
+    mask-composite:intersect;
+  }
+  .slide img{ object-position:50% 30%; }
+  .hero-content{ position:relative; z-index:2; height:100%; display:flex; flex-direction:column; justify-content:center; padding:5rem var(--hp) 4rem; }
+  .hero-text{ width:calc(46vw - var(--hp) - 2vw); }
+  .hero-controls{ position:absolute; left:var(--hp); right:var(--hp); bottom:1.75rem; }
+  .hero-controls .swipe-hint{ margin-left:auto; }
+}
+
+/* ---------- cinta de artistas ---------- */
+/* "Sonidos a lo" queda fijo a la izquierda; solo pasan los nombres */
+:root{ --tick:4.25rem; }
+.ticker{ display:flex; align-items:center; border-block:1px solid var(--line); background:var(--bg-2); overflow:hidden; height:var(--tick); padding:0; }
+.t-label{
+  flex-shrink:0; padding:0 1.4rem 0 var(--hp); font-weight:700; font-size:.72rem; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--silver); white-space:nowrap; border-right:1px solid var(--line); line-height:1.6;
+}
+.ticker-viewport{
+  flex:1; min-width:0; overflow:hidden;
+  -webkit-mask-image:linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+  mask-image:linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+}
+.ticker-row{ display:flex; align-items:center; width:max-content; animation:ticker 38s linear infinite; }
+@media (hover:hover){ .ticker:hover .ticker-row{ animation-play-state:paused; } }
+.ticker-row > *{ flex-shrink:0; }
+.t-name{ font-weight:800; font-stretch:125%; text-transform:uppercase; font-size:1.25rem; letter-spacing:-.01em; white-space:nowrap; color:var(--ink); padding:0 1.6rem; }
+.t-spark{ width:1rem; height:1rem; display:block; }
+@media (max-width:40rem){
+  :root{ --tick:3.5rem; }
+  .t-label{ font-size:.62rem; letter-spacing:.16em; padding:0 .9rem 0 1.25rem; max-width:5.2rem; white-space:normal; line-height:1.35; }
+  .t-name{ font-size:1rem; padding:0 1rem; }
+  .t-spark{ width:.75rem; height:.75rem; }
+  .ticker-row{ animation-duration:30s; }
+}
+@keyframes ticker{ to{ transform:translateX(-50%); } }
+
+/* ---------- secciones ---------- */
+.section{ padding:clamp(4rem,9vw,7rem) 0; position:relative; }
+.section-head{ display:flex; align-items:flex-end; justify-content:space-between; gap:1.5rem; flex-wrap:wrap; margin-bottom:2.5rem; }
+.section-head h2{ font-weight:900; font-stretch:125%; text-transform:uppercase; font-size:clamp(2rem,5vw,3.6rem); line-height:.92; letter-spacing:-.03em; margin-top:.7rem; }
+.section-head p{ color:var(--ink-2); max-width:28rem; }
+
+/* ---------- pad de batería ---------- */
+.studio{ background:linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%); }
+.machine{
+  border:1px solid var(--line); border-radius:1.75rem; padding:clamp(1rem,3vw,1.75rem);
+  background:radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255,255,255,.05), transparent 70%), var(--bg-3);
+  box-shadow:0 40px 80px -40px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.06);
+}
+.machine-top{ display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1.25rem; }
+.lcd{
+  display:flex; align-items:center; gap:.8rem; padding:.7rem 1rem; border-radius:.8rem;
+  background:#07080a; border:1px solid var(--line); font-variant-numeric:tabular-nums;
+  font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2); min-width:14rem;
+}
+.lcd b{ color:var(--silver); font-weight:700; }
+.eq{ display:flex; align-items:flex-end; gap:2px; height:.85rem; }
+.eq span{ width:3px; height:30%; border-radius:1px; background:var(--silver); opacity:.45; }
+.lcd.on .eq span{ opacity:1; animation:eq .5s ease-in-out infinite alternate; }
+.lcd.on .eq span:nth-child(2){ animation-delay:-.2s; }
+.lcd.on .eq span:nth-child(3){ animation-delay:-.35s; }
+@keyframes eq{ from{ height:25%; } to{ height:100%; } }
+.tempo{ display:flex; align-items:center; gap:.6rem; font-size:.8rem; color:var(--ink-2); }
+.tempo input{ width:7rem; accent-color:var(--silver); }
+.steps{ display:grid; grid-template-columns:repeat(16,1fr); gap:.3rem; margin-bottom:1.25rem; }
+.step{ height:.4rem; border-radius:var(--pill); background:rgba(255,255,255,.08); transition:background .25s; }
+.step:nth-child(4n+1){ background:rgba(255,255,255,.16); }
+.step.now{ background:#fff; box-shadow:0 0 .6rem rgba(255,255,255,.7); transition:none; }
+.pads{ display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(.6rem,1.6vw,1rem); }
+.pad{
+  --c:var(--accent-rgb);
+  position:relative; aspect-ratio:1.35/1; border-radius:1.1rem; padding:.9rem; text-align:left;
+  display:flex; flex-direction:column; justify-content:space-between;
+  background:linear-gradient(160deg, rgba(var(--c),.10), rgba(var(--c),.02) 60%), #0f0f10;
+  border:1px solid rgba(var(--c),.22);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07), 0 10px 24px -14px rgba(0,0,0,.9);
+  transition:transform .4s var(--ease-out), box-shadow .5s ease, background-color .5s;
+  touch-action:manipulation; user-select:none; -webkit-user-select:none;
+}
+.pad.gold{ --c:140,140,150; }
+.pad.hit{
+  transform:scale(.94); transition:none;
+  background-color:rgba(255,255,255,.28);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.4), 0 0 0 2px rgba(255,255,255,.9), 0 0 2.4rem rgba(255,255,255,.45);
+}
+.pad-name{ font-weight:800; font-stretch:125%; text-transform:uppercase; font-size:clamp(.9rem,2.2vw,1.25rem); letter-spacing:-.01em; }
+.pad-key{
+  align-self:flex-end; font-size:.7rem; font-weight:700; color:var(--ink-3);
+  border:1px solid var(--line); border-radius:.35rem; padding:.1rem .4rem; min-width:1.4rem; text-align:center;
+}
+@media (hover:none){ .pad-key{ display:none; } }
+.machine-note{ margin-top:1rem; font-size:.78rem; color:var(--ink-3); }
+
+/* ---------- kits: portada cuadrada entera, sin recortes ---------- */
+.kits{ display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%,34rem),1fr)); gap:1.25rem; }
+.kit{
+  position:relative; border-radius:1.6rem; overflow:hidden; background:var(--bg-3); border:1px solid var(--line);
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.1fr); grid-template-rows:1fr auto;
+  transition:transform .35s var(--ease-out), border-color .3s, box-shadow .35s;
+}
+@media (hover:hover){
+  .kit:hover{ transform:translateY(-4px); border-color:rgba(255,255,255,.18); box-shadow:0 30px 60px -30px rgba(0,0,0,.9); }
+}
+.kit-art{
+  position:relative; aspect-ratio:1/1; align-self:start; overflow:hidden;
+  grid-column:1; grid-row:1; margin:1rem 0 0 1rem; border-radius:1.1rem; background:#111113;
+  box-shadow:0 18px 40px -18px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.08);
+}
+.kit-art img{ width:100%; height:100%; object-fit:cover; display:block; transition:transform .6s var(--ease-out); }
+.kit-link{ display:block; width:100%; height:100%; }
+.kit-name{ display:inline-flex; align-items:center; gap:.45rem; }
+.kit-name svg{ width:1.05rem; height:1.05rem; opacity:.55; transition:transform .25s var(--ease-out), opacity .2s; }
+.kit-link:active img{ transform:scale(.98); transition-duration:80ms; }
+@media (hover:hover){
+  .kit-link:hover img{ transform:scale(1.04); }
+  .kit-name:hover svg{ opacity:1; transform:translate(2px,-2px); }
+}
+.kit-tag{
+  position:absolute; top:.8rem; left:.8rem; z-index:1; padding:.3rem .75rem; border-radius:var(--pill);
+  font-size:.7rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+  background:rgba(5,5,7,.6); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.18);
+}
+.kit-body{ grid-column:2; grid-row:1; padding:1.4rem 1.4rem .2rem; display:flex; flex-direction:column; gap:1rem; min-width:0; }
+.kit-body h3{ font-weight:900; font-stretch:125%; text-transform:uppercase; font-size:1.55rem; line-height:1; letter-spacing:-.025em; }
+.kit-facts{ display:flex; flex-wrap:wrap; gap:.4rem; list-style:none; }
+.kit-facts li{ font-size:.76rem; color:var(--ink-2); padding:.28rem .65rem; border-radius:var(--pill); background:rgba(255,255,255,.05); border:1px solid var(--line); }
+.play{
+  display:flex; align-items:center; gap:.7rem; align-self:flex-start;
+  height:3rem; padding:0 1.1rem 0 .3rem; border-radius:var(--pill);
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14);
+  font-size:.85rem; font-weight:700; transition:transform .25s var(--ease-out), background-color .2s;
+}
+.play:active{ transform:scale(.95); transition-duration:60ms; }
+@media (hover:hover){ .play:hover{ background:rgba(255,255,255,.1); } }
+.play-icon{ width:2.4rem; height:2.4rem; border-radius:50%; display:grid; place-items:center; background:var(--ink); color:#0a0a0c; position:relative; }
+.play-icon svg{ width:.9rem; height:.9rem; }
+.i-pause{ display:none; }
+.playing .i-play{ display:none; }
+.playing .i-pause{ display:block; }
+.play-ring{ position:absolute; inset:-3px; width:calc(100% + 6px); height:calc(100% + 6px); transform:rotate(-90deg); pointer-events:none; }
+.play-ring circle{ fill:none; stroke:var(--silver); stroke-width:2.5; stroke-linecap:round; stroke-dasharray:100; stroke-dashoffset:100; }
+/* pie de la tarjeta: precio abajo a la izquierda (bajo la portada), botón abajo a la derecha (bajo la info) */
+.kit-foot{
+  grid-column:1 / -1; grid-row:2; display:grid; grid-template-columns:subgrid; align-items:center;
+  margin-top:1rem; padding:1rem 1.4rem 1.2rem 1rem; border-top:1px solid var(--line);
+}
+.price-box{ display:flex; flex-direction:column; gap:.3rem; padding-left:.2rem; }
+.price-box small{ font-size:.72rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+.kit-cta{ margin-left:1.4rem; width:calc(100% - 1.4rem); }
+.kit-cta svg{ width:1.1rem; height:1.1rem; }
+.price{ font-weight:900; font-stretch:125%; font-size:2rem; line-height:1; letter-spacing:-.02em; }
+.diamond{ position:relative; display:inline-block; color:#e4e5ea; }
+/* "Gratis" de diamantes, versión sobria: textura más suave, sin resplandor y un destello lento cada tanto */
+@supports ((background-clip:text) or (-webkit-background-clip:text)){
+  .diamond{
+    background-image:
+      linear-gradient(100deg, transparent 44%, rgba(255,255,255,.6) 50%, transparent 56%),
+      linear-gradient(rgba(228,230,236,.42), rgba(228,230,236,.42)),
+      url(/assets/img/diamantes.jpg);
+    background-size:300% 100%, auto, 5.5rem auto;
+    -webkit-background-clip:text; background-clip:text; color:transparent; -webkit-text-fill-color:transparent;
+    animation:shine 6s ease-in-out infinite;
+  }
+}
+@keyframes shine{
+  0%, 65%{ background-position:200% 0, 0 0, 0 0; }
+  100%{ background-position:-100% 0, 0 0, 0 0; }
+}
+.twinkle{ position:absolute; width:.85rem; height:.85rem; pointer-events:none; opacity:0; animation:twinkle 3.4s ease-in-out infinite; }
+.twinkle path{ fill:#fff; }
+.twinkle.a{ top:-.45rem; right:-.55rem; }
+.twinkle.b, .twinkle.c{ display:none; }
+.diamond .twinkle.a{ width:.65rem; height:.65rem; top:-.3rem; right:-.45rem; animation-duration:6s; animation-delay:2s; }
+@keyframes twinkle{
+  0%, 72%, 100%{ opacity:0; transform:scale(.2) rotate(0deg); }
+  82%{ opacity:1; transform:scale(1) rotate(45deg); }
+  92%{ opacity:0; transform:scale(.4) rotate(90deg); }
+}
+/* estallido de destellos al terminar la descarga */
+.burst{ position:absolute; left:50%; top:1.75rem; width:1rem; height:1rem; margin:-.5rem 0 0 -.5rem; pointer-events:none; }
+.burst path{ fill:#fff; }
+.kit-more{ margin-top:auto; font-size:.78rem; color:var(--ink-3); }
+.kit-more a{ border-bottom:1px solid rgba(var(--silver-rgb),.55); color:var(--ink); }
+@media (max-width:30rem){
+  .kit{ grid-template-columns:1fr; grid-template-rows:auto 1fr auto; }
+  .kit-art{ grid-column:1; grid-row:1; margin:1rem 1rem 0; }
+  .kit-body{ grid-column:1; grid-row:2; }
+  .kit-foot{ grid-column:1; grid-row:3; grid-template-columns:auto 1fr; padding:1rem 1.2rem 1.2rem; }
+  .kit-cta{ margin-left:1rem; width:calc(100% - 1rem); }
+}
+/* ---------- distintivo del kit gratis: borde de diamante que gira y etiqueta de pavé ---------- */
+@property --ang{ syntax:'<angle>'; inherits:false; initial-value:0deg; }
+.kit.is-free{
+  border:1.5px solid transparent;
+  background:
+    linear-gradient(var(--bg-3), var(--bg-3)) padding-box,
+    conic-gradient(from var(--ang), #38383d, #ffffff 8%, #6c6c73 18%, #dcdce2 30%, #38383d 45%, #ffffff 58%, #6c6c73 70%, #dcdce2 84%, #38383d) border-box;
+  box-shadow:0 0 50px -18px rgba(255,255,255,.35);
+  animation:ring 9s linear infinite;
+}
+@keyframes ring{ to{ --ang:360deg; } }
+@media (hover:hover){ .kit.is-free:hover{ border-color:transparent; box-shadow:0 0 60px -14px rgba(255,255,255,.45), 0 30px 60px -30px rgba(0,0,0,.9); } }
+.kit-tag.free{
+  display:flex; align-items:center; gap:.35rem; color:#0a0a0c; font-weight:900; border:0;
+  padding:.38rem .8rem .38rem .6rem;
+  background:linear-gradient(rgba(255,255,255,.55), rgba(255,255,255,.55)), url(/assets/img/diamantes.jpg) center / 4.5rem auto;
+  box-shadow:0 0 0 1px rgba(255,255,255,.7), 0 0 18px rgba(255,255,255,.45);
+  backdrop-filter:none; -webkit-backdrop-filter:none;
+}
+.kit-tag.free svg{ width:.75rem; height:.75rem; }
+.kit-tag.free path{ fill:#0a0a0c; }
+
+/* ---------- reproductor flotante (aparece al tocar "Escuchar") ---------- */
+.player{
+  position:fixed; z-index:80; left:50%; bottom:max(1rem, env(safe-area-inset-bottom));
+  width:min(38rem, calc(100% - 1.5rem));
+  display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:.9rem;
+  padding:.7rem 1rem .7rem .7rem; border-radius:1.4rem;
+  background:rgba(24,24,30,.82); backdrop-filter:blur(26px) saturate(170%); -webkit-backdrop-filter:blur(26px) saturate(170%);
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 24px 60px -18px rgba(0,0,0,.85), inset 0 1px 0 rgba(255,255,255,.08);
+  transform:translate(-50%, 160%); visibility:hidden; touch-action:none;
+}
+.player-art{ width:3rem; height:3rem; border-radius:.75rem; object-fit:cover; background:#111113; }
+.player-main{ min-width:0; display:flex; flex-direction:column; gap:.45rem; }
+.player-top{ display:flex; justify-content:space-between; align-items:baseline; gap:.6rem; }
+.player-name{ font-weight:700; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.player-time{ font-size:.72rem; color:var(--ink-3); font-variant-numeric:tabular-nums; flex-shrink:0; }
+.seek{ position:relative; height:1rem; display:flex; align-items:center; cursor:pointer; }
+.seek-bar{ position:relative; width:100%; height:4px; border-radius:2px; background:rgba(255,255,255,.14); overflow:hidden; transition:height .2s var(--ease-out); }
+.seek-fill{ position:absolute; inset:0; transform-origin:left; transform:scaleX(0); background:linear-gradient(90deg, var(--silver), var(--accent)); }
+.seek.scrubbing .seek-bar{ height:7px; }
+@media (hover:hover){ .seek:hover .seek-bar{ height:7px; } }
+.player-btn{ width:2.75rem; height:2.75rem; border-radius:50%; display:grid; place-items:center; background:var(--ink); color:#0a0a0c; transition:transform .2s var(--ease-out); }
+.player-btn:active{ transform:scale(.92); transition-duration:60ms; }
+.player-btn svg{ width:1rem; height:1rem; }
+.vol{ display:flex; align-items:center; gap:.5rem; }
+.mute{ width:2.2rem; height:2.2rem; border-radius:50%; display:grid; place-items:center; color:var(--ink-2); transition:color .2s, transform .2s var(--ease-out); }
+.mute:active{ transform:scale(.9); transition-duration:60ms; }
+.mute svg{ width:1.2rem; height:1.2rem; }
+.mute .i-off{ display:none; }
+.mute.muted .i-on{ display:none; }
+.mute.muted .i-off{ display:block; }
+.vol input{
+  -webkit-appearance:none; appearance:none; width:6rem; height:1.4rem; background:transparent; cursor:pointer; touch-action:none;
+}
+.vol input::-webkit-slider-runnable-track{ height:4px; border-radius:2px; background:linear-gradient(to right, var(--ink) var(--pct,80%), rgba(255,255,255,.18) var(--pct,80%)); }
+.vol input::-webkit-slider-thumb{ -webkit-appearance:none; width:1rem; height:1rem; margin-top:calc(2px - .5rem); border-radius:50%; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.5); transition:transform .15s; }
+.vol input:active::-webkit-slider-thumb{ transform:scale(1.25); }
+.vol input::-moz-range-track{ height:4px; border-radius:2px; background:rgba(255,255,255,.18); }
+.vol input::-moz-range-progress{ height:4px; border-radius:2px; background:var(--ink); }
+.vol input::-moz-range-thumb{ width:1rem; height:1rem; border:0; border-radius:50%; background:#fff; }
+.no-vol .vol input{ display:none; } /* iPhone: el volumen va con los botones del teléfono; queda silenciar */
+.player-close{
+  position:absolute; top:-.6rem; right:-.6rem; width:1.7rem; height:1.7rem; border-radius:50%;
+  display:grid; place-items:center; background:var(--bg-3); border:1px solid rgba(255,255,255,.14); color:var(--ink-2);
+  box-shadow:0 4px 12px rgba(0,0,0,.5);
+}
+.player-close::before{ content:''; position:absolute; inset:-.6rem; }
+.player-close svg{ width:.75rem; height:.75rem; }
+@media (max-width:34rem){
+  .player{ grid-template-columns:auto minmax(0,1fr) auto; row-gap:.55rem; }
+  .vol{ grid-column:1 / -1; }
+  .vol input{ flex:1; width:auto; }
+}
+
+/* ---------- guía ---------- */
+.guide-card{
+  display:grid; grid-template-columns:1.2fr 1fr; gap:2rem; align-items:center;
+  border-radius:1.75rem; padding:clamp(1.5rem,4vw,3rem); border:1px solid var(--line);
+  background:radial-gradient(ellipse 60% 90% at 100% 100%, rgba(var(--silver-rgb),.08), transparent 70%), var(--bg-2);
+}
+.guide-card h2{ font-weight:900; font-stretch:125%; text-transform:uppercase; font-size:clamp(1.7rem,3.6vw,2.6rem); line-height:.95; letter-spacing:-.03em; margin:.7rem 0 1rem; }
+.guide-card p{ color:var(--ink-2); }
+.guide-steps{ list-style:none; display:flex; flex-direction:column; gap:.6rem; counter-reset:s; }
+.guide-steps li{ counter-increment:s; display:flex; gap:.9rem; align-items:center; padding:.9rem 1rem; border-radius:1rem; background:rgba(255,255,255,.04); border:1px solid var(--line); font-weight:600; font-size:.92rem; }
+.guide-steps li::before{ content:counter(s,decimal-leading-zero); font-stretch:125%; font-weight:900; color:var(--silver); }
+@media (max-width:52rem){ .guide-card{ grid-template-columns:1fr; } }
+
+/* ---------- sobre Kooper ---------- */
+.about{
+  display:grid; grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr); gap:clamp(1.5rem,4vw,3.5rem); align-items:center;
+  padding:clamp(1.2rem,3vw,2rem); border-radius:1.75rem; border:1px solid var(--line);
+  background:radial-gradient(ellipse 60% 90% at 0% 100%, rgba(255,255,255,.06), transparent 70%), var(--bg-2);
+}
+.about-art{ aspect-ratio:1/1; border-radius:1.3rem; overflow:hidden; background:#000; box-shadow:0 30px 60px -30px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.08); }
+.about-art img{ width:100%; height:100%; object-fit:cover; }
+.about-text h2{ font-weight:900; font-stretch:125%; text-transform:uppercase; font-size:clamp(1.8rem,3.8vw,2.9rem); line-height:.95; letter-spacing:-.03em; margin:.7rem 0 1rem; }
+.about-text p{ color:var(--ink-2); max-width:36rem; }
+.about-text p + p{ margin-top:.8rem; }
+.about-text p a{ border-bottom:1px solid rgba(var(--silver-rgb),.5); }
+@media (hover:hover){ .about-text p a:hover{ border-bottom-color:var(--ink); } }
+.about-text strong{ color:var(--ink); font-weight:600; }
+.about-links{ display:flex; gap:.6rem; flex-wrap:wrap; margin-top:1.5rem; }
+@media (max-width:52rem){
+  .about{ grid-template-columns:1fr; }
+  .about-art{ max-width:15rem; }
+}
+
+/* ---------- footer ---------- */
+footer{ border-top:1px solid var(--line); padding:2.5rem 0 calc(2.5rem + env(safe-area-inset-bottom)); color:var(--ink-3); font-size:.85rem; }
+footer .wrap{ display:flex; justify-content:space-between; align-items:center; gap:1.5rem; flex-wrap:wrap; }
+.socials{ display:flex; gap:.6rem; }
+.socials a{ width:2.6rem; height:2.6rem; border-radius:50%; display:grid; place-items:center; border:1px solid var(--line); color:var(--ink-2); transition:color .2s, border-color .2s, transform .25s var(--ease-out); }
+.socials a:active{ transform:scale(.92); transition-duration:60ms; }
+@media (hover:hover){ .socials a:hover{ color:var(--ink); border-color:rgba(255,255,255,.3); } }
+.socials svg{ width:1.1rem; height:1.1rem; }
+
+/* ---------- hoja del kit gratis (se arrastra para cerrar) ---------- */
+.scrim{ position:fixed; inset:0; z-index:90; background:rgba(0,0,0,.6); opacity:0; visibility:hidden; }
+.sheet{
+  position:fixed; z-index:100; left:50%; bottom:0; width:min(34rem,100%);
+  transform:translate(-50%,100%); visibility:hidden;
+  background:rgba(21,21,27,.92); backdrop-filter:blur(28px) saturate(170%); -webkit-backdrop-filter:blur(28px) saturate(170%);
+  border:1px solid rgba(255,255,255,.1); border-bottom:0; border-radius:1.75rem 1.75rem 0 0;
+  padding:.6rem 1.5rem calc(1.75rem + env(safe-area-inset-bottom));
+  box-shadow:0 -30px 80px -20px rgba(0,0,0,.8);
+}
+.sheet-grab{ display:block; width:100%; padding:.4rem 0 1rem; cursor:grab; touch-action:none; }
+.sheet-grab::before{ content:''; display:block; margin:0 auto; width:2.6rem; height:.3rem; border-radius:var(--pill); background:rgba(255,255,255,.28); }
+.sheet-close{ position:absolute; top:1rem; right:1rem; width:2.2rem; height:2.2rem; border-radius:50%; display:grid; place-items:center; background:rgba(255,255,255,.08); transition:transform .2s var(--ease-out); }
+.sheet-close:active{ transform:scale(.9); transition-duration:60ms; }
+.sheet-close svg{ width:1rem; height:1rem; }
+.sheet-head{ display:flex; gap:1rem; align-items:center; margin-bottom:1.25rem; touch-action:none; }
+.sheet-head img{ width:4.5rem; height:4.5rem; border-radius:1rem; object-fit:cover; background:#111113; flex-shrink:0; }
+.sheet-head h3{ font-weight:900; font-size:1.6rem !important; font-stretch:125%; text-transform:uppercase; font-size:1.45rem; line-height:1; letter-spacing:-.02em; margin-bottom:.35rem; }
+.sheet-head p{ font-size:.85rem; color:var(--ink-2); line-height:1.4; }
+.field{ display:flex; flex-direction:column; gap:.4rem; }
+.field input{
+  height:3.25rem; padding:0 1.1rem; border-radius:1rem; font:inherit; font-size:1rem;
+  background:rgba(0,0,0,.35); color:var(--ink); border:1px solid rgba(255,255,255,.14); transition:border-color .2s;
+}
+.field input:focus{ outline:none; border-color:var(--silver); }
+.field.error input{ border-color:#fff; box-shadow:0 0 0 1px #fff; }
+.field-msg{ min-height:1.2rem; font-size:.8rem; color:var(--ink); font-weight:600; }
+.sheet .btn{ width:100%; margin-top:.4rem; }
+.sheet-note{ margin-top:.9rem; font-size:.75rem; color:var(--ink-3); text-align:center; }
+.sheet-done{ display:none; text-align:center; padding:.5rem 0; }
+.sheet.done .sheet-form{ display:none; }
+.sheet.done .sheet-done{ display:block; }
+.check{ width:3.5rem; height:3.5rem; margin:0 auto 1rem; border-radius:50%; display:grid; place-items:center; background:rgba(var(--silver-rgb),.16); color:var(--silver); }
+.check svg{ width:1.6rem; height:1.6rem; }
+.check path{ stroke-dasharray:30; stroke-dashoffset:30; }
+.sheet.done .check path{ animation:draw .45s .1s var(--ease-out) forwards; }
+@keyframes draw{ to{ stroke-dashoffset:0; } }
+.sheet-done h3{ font-weight:900; font-stretch:125%; text-transform:uppercase; font-size:1.5rem; letter-spacing:-.02em; margin-bottom:.4rem; }
+.sheet-done p{ color:var(--ink-2); font-size:.9rem; margin-bottom:1rem; }
+.upsell{ margin-top:1.25rem; padding:1rem; border-radius:1.1rem; display:flex; align-items:center; gap:.9rem; text-align:left; background:rgba(255,255,255,.04); border:1px solid var(--line); }
+.upsell img{ width:3.4rem; height:3.4rem; border-radius:.7rem; object-fit:cover; background:#111113; flex-shrink:0; }
+.upsell div{ flex:1; min-width:0; font-size:.82rem; color:var(--ink-2); line-height:1.35; }
+.upsell strong{ display:block; color:var(--ink); font-size:.92rem; }
+.upsell .btn{ width:auto; margin:0; }
+
+/* ---------- tarjetas de producto: se tocan en cualquier parte ---------- */
+[data-href]{ cursor:pointer; -webkit-tap-highlight-color:transparent; }
+[data-href].pressing{ transform:scale(.985) !important; transition:transform .12s var(--ease-out) !important; }
+
+/* ---------- revelado al bajar (rápido y sin esperas) ---------- */
+.reveal{
+  opacity:0; transform:translateY(26px) scale(.985); filter:blur(6px);
+  transition:opacity .7s var(--ease-out), transform .85s var(--ease-out), filter .7s var(--ease-out);
+  transition-delay:var(--d, 0ms);
+}
+.reveal.in{ opacity:1; transform:none; filter:none; }
+
+/* ---------- accesibilidad ---------- */
+@media (prefers-reduced-motion: reduce){
+  .reveal{ transform:none; filter:none; transition:opacity .3s; transition-delay:0ms; }
+  .pad.hit{ transform:none; }
+  .kit{ transition:none; }
+  .lcd.on .eq span{ animation:none; height:70%; }
+  .header-cta{ transform:none; filter:none; }
+  .twinkle{ display:none; }
+  .kit.is-free{ animation:none; }
+}
+@media (prefers-reduced-transparency: reduce){
+  .header.scrolled, .sheet, .btn-glass, .kit-tag, .player{ backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .header.scrolled{ background:var(--bg); }
+  .sheet, .player{ background:var(--bg-3); }
+}
+@media (prefers-contrast: more){
+  :root{ --line:rgba(255,255,255,.35); --ink-2:#e0e0e6; --ink-3:#c0c0c8; }
+}
+</style>
+</head>
+<body>
+
+<header class="header" id="header">
+  <a href="#top" class="logo" aria-label="Kooper Sound, inicio">
+    <span class="logo-k"><img src="/assets/img/logo-k.jpg" alt="" width="42" height="42"><svg class="twinkle a" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z"/></svg></span>
+    <span class="logo-name">KOOPER SOUND<small>Drum kits</small></span>
+  </a>
+  <nav class="nav" aria-label="Secciones">
+    <a href="#kits">Kits</a>
+    <a href="#guia">Guía</a>
+    <a href="#sobre">Sobre mí</a>
+  </nav>
+  <div class="header-right">
+    <div class="header-social">
+      <a href="https://instagram.com/kooper_prod" target="_blank" rel="noopener noreferrer" aria-label="Instagram de Kooper">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1" fill="currentColor"/></svg></a>
+      <a href="https://youtube.com/@koopertracks" target="_blank" rel="noopener noreferrer" aria-label="YouTube de Kooper">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="6" width="19" height="12" rx="4"/><path d="M10.5 9.3v5.4l4.6-2.7z" fill="currentColor"/></svg></a>
+      <a href="https://www.beatstars.com/koopertracks" target="_blank" rel="noopener noreferrer" aria-label="Beatstars de Kooper">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 15V9a8 8 0 0 1 16 0v6"/><rect x="3" y="14" width="4" height="6" rx="1.4"/><rect x="17" y="14" width="4" height="6" rx="1.4"/></svg></a>
+    </div>
+    <button class="header-cta" id="headerCta" data-open-sheet tabindex="-1" aria-hidden="true">
+      <img src="https://koopersound.com/assets/img/inferno-demo.jpg" alt="">
+      <span class="header-cta-label">Inferno gratis</span>
+    </button>
+  </div>
+</header>
+
+<section class="hero" id="top" aria-label="Inicio">
+  <div class="hero-media" id="heroMedia" aria-roledescription="carrusel" aria-label="Fotos de artistas">
+    <div class="hero-track" id="heroTrack">
+      <div class="slide" aria-hidden="false"><img src="/assets/img/kooper-hero.jpg" alt="" draggable="false"></div>
+    </div>
+  </div>
+  <div class="hero-content">
+    <div class="hero-controls">
+      <div class="dots" id="dots" role="tablist" aria-label="Elegir foto">
+        <button class="dot" role="tab" aria-label="Foto 1"><span></span></button>
+        <button class="dot" role="tab" aria-label="Foto 2"><span></span></button>
+      </div>
+      <div class="swipe-hint" id="swipeHint" aria-hidden="true">
+        Desliza
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </div>
+    </div>
+    <div class="hero-text">
+      <span class="eyebrow">Drum kits · 0% regalías</span>
+      <h1>
+        <span class="l1">El sonido del</span>
+        <span class="l2">Reggaetón</span>
+        <span class="l3">Chileno</span>
+      </h1>
+      <p class="hero-sub">Kicks, snares, loops, MIDIs y FX del productor Kooper. Listos para arrastrar al proyecto y que suene a calle.</p>
+      <div class="hero-actions">
+        <button class="btn btn-dl" id="heroCta" data-open-sheet>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          Descargar Inferno gratis
+        </button>
+        <a href="#kits" class="arrow-link">Ver los kits
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="ticker" aria-label="Sonidos a lo Cris Mj, Floyymenor, Jere Klein, Marcianeke, Pailita, Ness, Big Cvyu y Reelian">
+  <span class="t-label" aria-hidden="true">Sonidos a lo</span>
+  <div class="ticker-viewport"><div class="ticker-row" id="tickerRow" aria-hidden="true"></div></div>
+</div>
+
+<section class="section" id="kits">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div>
+        <span class="eyebrow">Catálogo</span>
+        <h2 class="wide">Los kits</h2>
+      </div>
+    </div>
+
+    <div class="kits">
+      <article class="kit is-free reveal" data-href="https://koopersound.com/kits/inferno">
+        <div class="kit-art">
+          <a href="https://koopersound.com/kits/inferno" class="kit-link" aria-label="Ver Inferno"><img src="https://koopersound.com/assets/img/inferno-demo.jpg" alt="Portada del kit Inferno" loading="lazy"></a>
+          <span class="kit-tag free"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z"/></svg>Gratis</span>
+        </div>
+        <div class="kit-body">
+          <h3 class="wide"><a href="https://koopersound.com/kits/inferno" class="kit-name">Inferno<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg></a></h3>
+          <ul class="kit-facts"><li>293 archivos</li><li>20 MIDIs</li><li>150 MB</li></ul>
+          <button class="play" data-name="Inferno" data-art="https://koopersound.com/assets/img/inferno-demo.jpg" data-audio="https://koopersound.com/assets/audio/inferno-demo.mp3" aria-label="Escuchar preview de Inferno">
+            <span class="play-icon">
+              <svg class="play-ring" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="16" pathLength="100"/></svg>
+              <svg class="i-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+            </span>
+            Escuchar
+          </button>
+        </div>
+        <div class="kit-foot">
+          <span class="price-box"><small>Con tu email</small><span class="price free wide diamond">Gratis<svg class="twinkle a" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z"/></svg><svg class="twinkle b" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z"/></svg><svg class="twinkle c" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z"/></svg></span></span>
+          <button class="btn btn-dl kit-cta" data-open-sheet><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Descargar gratis</button>
+        </div>
+      </article>
+
+      <article class="kit reveal" data-href="https://koopersound.com/kits/inferno-deluxe">
+        <div class="kit-art">
+          <a href="https://koopersound.com/kits/inferno-deluxe" class="kit-link" aria-label="Ver Inferno Deluxe"><img src="https://koopersound.com/assets/img/inferno-full.jpg" alt="Portada del kit Inferno Deluxe" loading="lazy"></a>
+          <span class="kit-tag">Drum kit</span>
+        </div>
+        <div class="kit-body">
+          <h3 class="wide"><a href="https://koopersound.com/kits/inferno-deluxe" class="kit-name">Inferno Deluxe<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg></a></h3>
+          <ul class="kit-facts"><li>514 archivos</li><li>50 MIDIs</li><li>315 MB</li></ul>
+          <button class="play" data-name="Inferno Deluxe" data-art="https://koopersound.com/assets/img/inferno-full.jpg" data-audio="https://koopersound.com/assets/audio/inferno-full.mp3" aria-label="Escuchar preview de Inferno Deluxe">
+            <span class="play-icon">
+              <svg class="play-ring" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="16" pathLength="100"/></svg>
+              <svg class="i-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+            </span>
+            Escuchar
+          </button>
+        </div>
+        <div class="kit-foot">
+          <span class="price-box"><small><s>Antes $19.99</s></small><span class="price wide">$9.99</span></span>
+          <a class="btn btn-red kit-cta" href="https://wa.me/5491124053906?text=Hola!%20Quiero%20comprar%20Inferno%20Deluxe%20%F0%9F%94%A5" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.2c-.2.6-1.3 1.2-1.8 1.2-.5.1-1 .2-3.3-.7-2.8-1.1-4.5-3.9-4.7-4.1-.1-.2-1.1-1.5-1.1-2.9s.7-2.1 1-2.4c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .6.5l.9 2.1c.1.2.1.4 0 .5l-.3.5-.4.5c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.6-.1l.9-1c.2-.3.4-.2.6-.1l2 .9c.3.1.5.2.5.3.1.2.1.7-.1 1.3z"/></svg>
+            Comprar
+          </a>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="guia" style="padding-top:0">
+  <div class="wrap">
+    <div class="guide-card reveal">
+      <div>
+        <span class="eyebrow">Guía gratis</span>
+        <h2>Cómo hacer reggaetón chileno</h2>
+        <p>El tempo, el patrón de batería y los sonidos que hacen que un beat suene chileno. Paso a paso y con video.</p>
+        <div style="margin-top:1.5rem"><a class="btn btn-glass" href="https://koopersound.com/guias/como-hacer-reggaeton-chileno">Leer la guía
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div>
+      </div>
+      <ol class="guide-steps">
+        <li>El tempo y el swing</li>
+        <li>El patrón de dembow</li>
+        <li>Kicks y 808 que pegan</li>
+        <li>Percusión y FX</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="sobre" style="padding-top:0">
+  <div class="wrap">
+    <div class="about reveal">
+      <div class="about-art"><img src="/assets/img/k-diamante.jpg" alt="La K de diamantes de Kooper Sound" loading="lazy"></div>
+      <div class="about-text">
+        <span class="eyebrow">Sobre mí</span>
+        <h2>Sonido que se siente, no solo se escucha</h2>
+        <p>Kooper Sound es la tienda de drum kits de reggaetón chileno de <strong>Kooper</strong>, productor de música urbana. Nace para productores que no tienen tiempo que perder buscando sonidos genéricos: cada kit está curado y masterizado para competir en la industria desde el primer beat.</p>
+        <p>Puedes empezar gratis con <a href="https://koopersound.com/kits/inferno"><strong>Inferno</strong></a> (293 archivos entre drum loops, kicks, snares, percusión, MIDIs y FX) o ir por <a href="https://koopersound.com/kits/inferno-deluxe"><strong>Inferno Deluxe</strong></a>, la versión completa con 514 archivos. Todo en WAV + MIDI y 0% regalías.</p>
+        <div class="about-links">
+          <a class="btn btn-glass btn-sm" href="https://instagram.com/kooper_prod" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1" fill="currentColor"/></svg>@kooper_prod</a>
+          <a class="btn btn-glass btn-sm" href="https://youtube.com/@koopertracks" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="4"/><path d="M10.5 9.3v5.4l4.6-2.7z" fill="currentColor"/></svg>@koopertracks</a>
+          <a class="btn btn-glass btn-sm" href="https://www.beatstars.com/koopertracks" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 15V9a8 8 0 0 1 16 0v6"/><rect x="3" y="14" width="4" height="6" rx="1.4"/><rect x="17" y="14" width="4" height="6" rx="1.4"/></svg>Beats en BeatStars</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Kooper Sound · Drum kits de reggaetón chileno</span>
+    <div class="socials">
+      <a href="https://instagram.com/kooper_prod" target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1" fill="currentColor"/></svg></a>
+      <a href="https://www.beatstars.com/koopertracks" target="_blank" rel="noopener noreferrer" aria-label="Beatstars">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 15V9a8 8 0 0 1 16 0v6"/><rect x="3" y="14" width="4" height="6" rx="1.4"/><rect x="17" y="14" width="4" height="6" rx="1.4"/></svg></a>
+      <a href="https://youtube.com/@koopertracks" target="_blank" rel="noopener noreferrer" aria-label="YouTube">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2.5" y="6" width="19" height="12" rx="4"/><path d="M10.5 9.3v5.4l4.6-2.7z" fill="currentColor"/></svg></a>
+    </div>
+  </div>
+</footer>
+
+<!-- reproductor -->
+<div class="player" id="player" role="region" aria-label="Reproductor del preview">
+  <img class="player-art" id="playerArt" src="" alt="">
+  <div class="player-main">
+    <div class="player-top"><span class="player-name" id="playerName">Preview</span><span class="player-time" id="playerTime">0:00 / 0:00</span></div>
+    <div class="seek" id="seek" role="slider" tabindex="0" aria-label="Avance del preview" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="seek-bar"><div class="seek-fill" id="seekFill"></div></div>
+    </div>
+  </div>
+  <button class="player-btn playing" id="playerBtn" aria-label="Pausar">
+    <svg class="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+    <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+  </button>
+  <div class="vol">
+    <button class="mute" id="mute" aria-label="Silenciar">
+      <svg class="i-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      <svg class="i-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor"/><path d="M16 9l5 6M21 9l-5 6"/></svg>
+    </button>
+    <input type="range" id="volume" min="0" max="100" value="80" aria-label="Volumen">
+  </div>
+  <button class="player-close" id="playerClose" aria-label="Cerrar reproductor">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+</div>
+
+<!-- hoja del kit gratis -->
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <button class="sheet-grab" id="sheetGrab" aria-label="Arrastra hacia abajo para cerrar"></button>
+  <button class="sheet-close" id="sheetClose" aria-label="Cerrar">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <div class="sheet-form">
+    <div class="sheet-head" id="sheetHead">
+      <img src="https://koopersound.com/assets/img/inferno-demo.jpg" alt="">
+      <div>
+        <h3 id="sheetTitle">Inferno <span class="diamond">gratis</span></h3>
+        <p>293 archivos: drum loops, kicks, snares, percusión, 20 MIDIs y FX.</p>
+      </div>
+    </div>
+    <form id="freeForm" novalidate>
+      <div class="field" id="field">
+        <label class="sr-only" for="email">Tu email</label>
+        <input id="email" type="email" inputmode="email" autocomplete="email" placeholder="tu@email.com" required>
+        <span class="field-msg" id="fieldMsg" aria-live="polite"></span>
+      </div>
+      <button class="btn btn-dl" type="submit">Descargar gratis</button>
+    </form>
+  </div>
+  <div class="sheet-done" aria-live="polite">
+    <div class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+    <h3>¡Listo!</h3>
+    <a class="btn btn-dl" id="downloadNow">Descargar ahora</a>
+    <div class="upsell">
+      <img src="https://koopersound.com/assets/img/inferno-full.jpg" alt="">
+      <div><strong>¿Quieres más? Inferno Deluxe</strong>514 archivos y 50 MIDIs a $9.99</div>
+      <a class="btn btn-red btn-sm" href="https://koopersound.com/kits/inferno-deluxe">Ver</a>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- suscripción a AWeber + descarga de Inferno ----------
+   Mismos datos que el formulario de la versión anterior: se manda por
+   atrás (sin redirigir a AWeber) y se dispara la descarga del kit. */
+function sendToAweber(email){
+  const fd = new FormData();
+  fd.append('meta_web_form_id', '221083114');
+  fd.append('meta_split_id', '');
+  fd.append('listname', 'awlist6976063');
+  fd.append('meta_adtracking', 'inferno_free');
+  fd.append('meta_message', '1');
+  fd.append('meta_required', 'name,email');
+  fd.append('meta_tooltip', '');
+  fd.append('redirect', location.href);
+  fd.append('meta_redirect_onlist', 'https://www.aweber.com/thankyou-coi.htm?m=text');
+  /* AWeber pide "name" obligatorio; usamos lo que va antes de la @ */
+  fd.append('name', email.split('@')[0]);
+  fd.append('email', email);
+  /* no-cors: addlead.pl no responde a fetch(), pero el alta llega igual */
+  fetch('https://www.aweber.com/scripts/addlead.pl', { method:'POST', mode:'no-cors', body: fd }).catch(()=>{});
+}
+/* descarga automática; el botón "Descargar ahora" queda por si el navegador la bloquea */
+function autoDownload(url){
+  const a = document.createElement('a');
+  a.href = url; a.download = '';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+/* el link del .zip no está en el HTML: se le pide a descarga.php después del email */
+function deliverInferno(addr, onFail){
+  const link = document.getElementById('downloadNow');
+  fetch('/descarga.php', { method:'POST', body:new URLSearchParams({ email:addr }) })
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(j => { link.href = j.url; autoDownload(j.url); })
+    .catch(onFail);
+}
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+/* ---------- resorte (damping + response, como los de Apple) ----------
+   Siempre parte del valor y la velocidad actuales: se puede
+   interrumpir y redirigir en cualquier momento sin saltos. */
+class Spring {
+  constructor(value, onUpdate){ this.x = value; this.v = 0; this.target = value; this.raf = 0; this.onUpdate = onUpdate; }
+  to(target, { response = .4, damping = 1, velocity, onRest, always = false } = {}){
+    this.target = target; this.onRest = onRest;
+    if(velocity !== undefined) this.v = velocity;
+    if(reduceMotion.matches && !always){ this.set(target); onRest && onRest(); return; }
+    this.k = Math.pow(2 * Math.PI / response, 2);
+    this.c = 4 * Math.PI * damping / response;
+    if(!this.raf){ this.last = performance.now(); this.raf = requestAnimationFrame(this.step); }
+  }
+  step = now => {
+    const dt = Math.min(.064, (now - this.last) / 1000); this.last = now;
+    const n = Math.max(1, Math.ceil(dt / .004)), h = dt / n;
+    for(let i = 0; i < n; i++){
+      const a = -this.k * (this.x - this.target) - this.c * this.v;
+      this.v += a * h; this.x += this.v * h;
+    }
+    if(Math.abs(this.v) < .5 && Math.abs(this.x - this.target) < .3){
+      this.x = this.target; this.v = 0; this.raf = 0; this.onUpdate(this.x);
+      const done = this.onRest; this.onRest = null; done && done(); return;
+    }
+    this.onUpdate(this.x);
+    this.raf = requestAnimationFrame(this.step);
+  };
+  stop(){ cancelAnimationFrame(this.raf); this.raf = 0; }
+  set(x){ this.stop(); this.x = x; this.v = 0; this.onUpdate(x); }
+}
+// dónde terminaría un gesto lanzado con esa velocidad (fórmula de Apple)
+const project = (v, d = .998) => (v / 1000) * d / (1 - d);
+// resistencia progresiva en los bordes
+const rubberband = (over, dim, c = .55) => (over * dim * c) / (dim + c * Math.abs(over));
+// velocidad a partir de los últimos movimientos del dedo
+function tracker(){
+  let pts = [];
+  return {
+    reset(){ pts = []; },
+    add(x, t){ pts.push([x, t]); while(pts.length > 2 && t - pts[0][1] > 100) pts.shift(); },
+    v(){ if(pts.length < 2) return 0; const [x0, t0] = pts[0], [x1, t1] = pts[pts.length - 1]; return t1 > t0 ? (x1 - x0) / (t1 - t0) * 1000 : 0; }
+  };
+}
+/* scroll suave con resorte: baja fluido, se puede cortar con el dedo o la rueda en cualquier momento */
+(function(){
+  let spring = null;
+  const stop = () => spring && spring.stop();
+  ['wheel', 'touchstart', 'keydown', 'pointerdown'].forEach(t => addEventListener(t, stop, { passive:true }));
+  window.smoothScrollTo = y => {
+    y = Math.max(0, Math.min(y, document.documentElement.scrollHeight - innerHeight));
+    if(!spring) spring = new Spring(scrollY, v => scrollTo(0, v));
+    spring.stop(); spring.x = scrollY; spring.v = 0;
+    const dist = Math.abs(y - scrollY);
+    // siempre desliza, aunque el sistema tenga "reducir movimiento" (decisión de diseño: el salto seco se sentía brusco)
+    spring.to(y, { response: Math.min(1.1, .55 + dist / 4000), damping:1, always:true }); // más lejos, un poco más largo
+  };
+  document.addEventListener('click', e => {
+    // cualquier link a un lugar de esta misma página: "#kits" o "https://koopersound.com/#kits" estando en la home
+    const a = e.target.closest('a[href*="#"]'); if(!a || a.target === '_blank') return;
+    if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // abrir en pestaña nueva sigue funcionando
+    if(a.origin !== location.origin || a.pathname !== location.pathname || a.search !== location.search) return;
+    const id = a.hash; if(id.length < 2) return;
+    const el = document.getElementById(decodeURIComponent(id.slice(1))); if(!el) return;
+    e.preventDefault();
+    const head = document.querySelector('.header');
+    const y = id === '#top' ? 0 : el.getBoundingClientRect().top + scrollY - (head ? head.offsetHeight : 0) - 12;
+    history.replaceState(null, '', id);
+    requestAnimationFrame(() => smoothScrollTo(y)); // después del toque (que corta cualquier scroll anterior)
+  });
+})();
+/* tarjetas de producto: tocar en cualquier parte lleva a su página
+   (menos sus botones: Escuchar, Descargar, Comprar siguen haciendo lo suyo) */
+(function(){
+  const skip = e => e.target.closest('a, button, input, label, [data-no-link]');
+  document.addEventListener('click', e => {
+    const card = e.target.closest('[data-href]'); if(!card || skip(e)) return;
+    if(e.metaKey || e.ctrlKey || e.shiftKey) window.open(card.dataset.href, '_blank');   // Ctrl/Cmd + clic: pestaña nueva
+    else location.href = card.dataset.href;
+  });
+  document.addEventListener('auxclick', e => {                                              // clic del medio: pestaña nueva
+    const card = e.target.closest('[data-href]'); if(card && e.button === 1 && !skip(e)) window.open(card.dataset.href, '_blank');
+  });
+  // respuesta al apoyar el dedo: la tarjeta se hunde un poquito
+  document.addEventListener('pointerdown', e => {
+    const card = e.target.closest('[data-href]'); if(!card || skip(e)) return;
+    card.classList.add('pressing');
+    const up = () => { card.classList.remove('pressing'); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
+    addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  });
+})();
+const fmt = s => (!isFinite(s) || s < 0) ? '0:00' : `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+
+/* ---------- header: vidrio al bajar, sección activa y atajo al kit gratis ---------- */
+const header = $('#header');
+const onScroll = () => header.classList.toggle('scrolled', scrollY > 40);
+addEventListener('scroll', onScroll, { passive:true }); onScroll();
+(function(){
+  const links = $$('.nav a');
+  const io = new IntersectionObserver(es => es.forEach(e => {
+    if(e.isIntersecting) links.forEach(l => l.classList.toggle('active', l.hash === '#' + e.target.id));
+  }), { rootMargin:'-45% 0px -50% 0px' });
+  links.forEach(l => { const s = $(l.hash); s && io.observe(s); });
+
+  // el atajo solo aparece cuando el botón grande del inicio salió de la pantalla
+  const cta = $('#headerCta');
+  new IntersectionObserver(([e]) => {
+    const show = !e.isIntersecting && e.boundingClientRect.top < 0;
+    cta.classList.toggle('show', show);
+    header.classList.toggle('cta-on', show);
+    cta.tabIndex = show ? 0 : -1;
+    cta.setAttribute('aria-hidden', !show);
+  }).observe($('#heroCta'));
+})();
+
+/* ---------- revelado al bajar ---------- */
+(function(){
+  const io = new IntersectionObserver(es => es.forEach(e => {
+    if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+  }), { threshold:.15 });
+  $$('.kits .kit').forEach((el, i) => el.style.setProperty('--d', i * 120 + 'ms'));
+  $$('.reveal').forEach(el => io.observe(el));
+})();
+
+/* ---------- cinta "Sonidos a lo..." con destellos plateados ---------- */
+(function(){
+  const names = ['Cris Mj','Floyymenor','Jere Klein','Marcianeke','Pailita','Ness','Big Cvyu','Reelian'];
+  const spark = '<svg class="t-spark" viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#c9ccd6"/><stop offset="1" stop-color="#8d92a0"/></linearGradient></defs><path d="M12 1.5c.6 5.3 2.2 7.6 7.8 8.5-5.6.9-7.2 3.2-7.8 8.5-.6-5.3-2.2-7.6-7.8-8.5 5.6-.9 7.2-3.2 7.8-8.5z" fill="url(#sg)" transform="translate(0 2)"/></svg>';
+  const group = dup =>
+    names.map(n => `<span class="t-name${dup}">${n}</span><span class="${dup.trim()}">${spark}</span>`).join('');
+  $('#tickerRow').innerHTML = group('') + group(' dup');
+})();
+
+/* ---------- carrusel de artistas: cambia solo y también se arrastra 1:1 ---------- */
+(function(){
+  const media = $('#heroMedia'), track = $('#heroTrack'), slides = $$('.slide'), dots = $$('.dot');
+  // con una sola foto no hay carrusel: sin puntos, sin "Desliza" y sin arrastre
+  if(slides.length < 2){ $('.hero-controls').style.display = 'none'; media.style.cursor = 'default'; return; }
+  const n = slides.length; let index = 0, W = media.clientWidth, lastTouch = -Infinity;
+  const render = x => {
+    track.style.transform = `translate3d(${x}px,0,0)`;
+    const p = -x / W; // los puntos acompañan el arrastre de forma continua
+    dots.forEach((d, i) => {
+      const k = Math.max(0, 1 - Math.abs(p - i));
+      d.style.width = (8 + 20 * k) + 'px';
+      d.firstChild.style.opacity = k;
+    });
+  };
+  const spring = new Spring(0, render);
+  const goTo = (i, opts = {}) => {
+    const prev = index;
+    index = ((i % n) + n) % n;
+    slides.forEach((s, j) => s.setAttribute('aria-hidden', j !== index));
+    dots.forEach((d, j) => d.setAttribute('aria-selected', j === index));
+    if(reduceMotion.matches && prev !== index){ // sin deslizamiento: un fundido suave
+      track.animate([{ opacity:0 }, { opacity:1 }], { duration:450, easing:'ease-out' });
+    }
+    spring.to(-index * W, { response:.5, damping:1, ...opts });
+  };
+  dots.forEach((d, i) => d.addEventListener('click', () => { lastTouch = performance.now(); goTo(i); }));
+  addEventListener('resize', () => { W = media.clientWidth; spring.set(-index * W); });
+
+  // gesto
+  const vt = tracker(); let state = null, startX = 0, startY = 0, base = 0;
+  media.addEventListener('pointerdown', e => {
+    if(e.button !== 0) return;
+    state = 'pending'; startX = e.clientX; startY = e.clientY; lastTouch = performance.now();
+    vt.reset(); vt.add(e.clientX, e.timeStamp);
+  });
+  media.addEventListener('pointermove', e => {
+    if(!state) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if(state === 'pending'){
+      if(Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)){ state = null; return; } // es scroll vertical
+      if(Math.abs(dx) < 10) return;                                              // umbral antes de decidir
+      state = 'drag'; media.setPointerCapture(e.pointerId); media.classList.add('dragging');
+      spring.stop(); base = spring.x; startX = e.clientX;                        // agarra desde donde está, sin salto
+      $('#swipeHint').style.opacity = 0;
+    }
+    lastTouch = performance.now();
+    vt.add(e.clientX, e.timeStamp);
+    let x = base + (e.clientX - startX);
+    const min = -(n - 1) * W;
+    if(x > 0) x = rubberband(x, W);
+    else if(x < min) x = min - rubberband(min - x, W);
+    spring.x = x; spring.v = 0; render(x);
+  });
+  const end = () => {
+    if(state !== 'drag'){ state = null; return; }
+    state = null; media.classList.remove('dragging'); lastTouch = performance.now();
+    const v = vt.v();
+    const projected = spring.x + project(v);                       // a dónde va el gesto, no dónde se soltó
+    const target = Math.max(0, Math.min(n - 1, Math.max(index - 1, Math.min(index + 1, Math.round(-projected / W)))));
+    goTo(target, { velocity:v, damping: Math.abs(v) > 400 ? .82 : 1 }); // rebote solo si hubo impulso
+  };
+  media.addEventListener('pointerup', end);
+  media.addEventListener('pointercancel', end);
+
+  // cambio automático cada 5 s; si la persona la tocó, espera a que la suelte un rato
+  setInterval(() => {
+    if(document.hidden || state || performance.now() - lastTouch < 8000) return;
+    goTo(index + 1);
+  }, 5000);
+  render(0); goTo(0);
+})();
+
+/* ---------- previews: reproductor flotante con volumen ---------- */
+(function(){
+  const audio = new Audio(); audio.preload = 'auto';
+  const player = $('#player'), btn = $('#playerBtn'), seek = $('#seek'), fill = $('#seekFill');
+  const time = $('#playerTime'), vol = $('#volume'), mute = $('#mute');
+  let current = null, lastVol = .8, H = 0;
+
+  // iPhone no deja cambiar el volumen desde la web: se deja solo el botón de silenciar
+  const probe = new Audio(); probe.volume = .5;
+  if(probe.volume !== .5) player.classList.add('no-vol');
+
+  // aparece y se va con resorte; también se puede tirar hacia abajo para cerrarlo
+  const render = y => { player.style.transform = `translate(-50%, ${y}px)`; };
+  const spring = new Spring(0, render);
+  const offscreen = () => player.offsetHeight + 40;
+  function showPlayer(){
+    player.style.visibility = 'visible';
+    if(!spring.raf && spring.x === 0 && !player.dataset.open) spring.set(offscreen());
+    player.dataset.open = '1';
+    spring.to(0, { response:.45, damping:1 });
+  }
+  function hidePlayer(velocity){
+    delete player.dataset.open;
+    audio.pause();
+    spring.to(offscreen(), { response:.4, damping:1, velocity, onRest: () => { if(!player.dataset.open) player.style.visibility = 'hidden'; } });
+    resetCard(current); current = null;
+  }
+
+  const ring = b => b.querySelector('.play-ring circle');
+  function resetCard(b){ if(!b) return; b.classList.remove('playing'); ring(b).style.strokeDashoffset = 100; }
+  function setVol(v){
+    v = Math.max(0, Math.min(1, v));
+    audio.volume = v; audio.muted = v === 0 && player.classList.contains('no-vol') ? true : audio.muted;
+    vol.value = Math.round(v * 100); vol.style.setProperty('--pct', vol.value + '%');
+    mute.classList.toggle('muted', v === 0 || audio.muted);
+  }
+  setVol(lastVol);
+
+  $$('.play').forEach(b => b.addEventListener('click', () => {
+    window.stopDembow && window.stopDembow();
+    if(current === b){ audio.paused ? audio.play().catch(()=>{}) : audio.pause(); showPlayer(); return; }
+    resetCard(current); current = b;
+    audio.src = b.dataset.audio; audio.play().catch(()=>{});
+    $('#playerName').textContent = b.dataset.name;
+    $('#playerArt').src = b.dataset.art;
+    time.textContent = '0:00 / 0:00'; fill.style.transform = 'scaleX(0)';
+    showPlayer();
+  }));
+  window.pausePreview = () => audio.pause();
+
+  const sync = () => {
+    const on = !audio.paused;
+    btn.classList.toggle('playing', on); btn.setAttribute('aria-label', on ? 'Pausar' : 'Reproducir');
+    current && current.classList.toggle('playing', on);
+  };
+  audio.addEventListener('play', sync);
+  audio.addEventListener('pause', sync);
+  let scrubbing = false;
+  const paint = () => {
+    const p = audio.duration ? audio.currentTime / audio.duration : 0;
+    if(!scrubbing) fill.style.transform = `scaleX(${p})`;
+    time.textContent = `${fmt(audio.currentTime)} / ${fmt(audio.duration)}`;
+    seek.setAttribute('aria-valuenow', Math.round(p * 100));
+    if(current) ring(current).style.strokeDashoffset = 100 - p * 100;
+  };
+  audio.addEventListener('timeupdate', paint);
+  audio.addEventListener('loadedmetadata', paint);
+  audio.addEventListener('ended', () => { audio.currentTime = 0; sync(); paint(); });
+  btn.addEventListener('click', () => { audio.paused ? audio.play().catch(()=>{}) : audio.pause(); });
+
+  // volumen
+  vol.addEventListener('input', () => { audio.muted = false; const v = vol.value / 100; if(v > 0) lastVol = v; setVol(v); });
+  mute.addEventListener('click', () => {
+    if(player.classList.contains('no-vol')){ audio.muted = !audio.muted; mute.classList.toggle('muted', audio.muted); return; }
+    if(audio.volume > 0){ lastVol = audio.volume; setVol(0); } else setVol(lastVol || .8);
+  });
+
+  // barra de avance: se arrastra 1:1
+  const seekTo = e => {
+    const r = seek.getBoundingClientRect(), p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    fill.style.transform = `scaleX(${p})`;
+    if(audio.duration) audio.currentTime = p * audio.duration;
+  };
+  seek.addEventListener('pointerdown', e => { scrubbing = true; seek.classList.add('scrubbing'); seek.setPointerCapture(e.pointerId); seekTo(e); });
+  seek.addEventListener('pointermove', e => { if(scrubbing) seekTo(e); });
+  const stopScrub = () => { scrubbing = false; seek.classList.remove('scrubbing'); };
+  seek.addEventListener('pointerup', stopScrub); seek.addEventListener('pointercancel', stopScrub);
+  seek.addEventListener('keydown', e => {
+    if(!audio.duration) return;
+    if(e.key === 'ArrowRight') audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+    if(e.key === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5);
+  });
+
+  // cerrar: botón o tirón hacia abajo
+  $('#playerClose').addEventListener('click', () => hidePlayer());
+  const vt = tracker(); let drag = false, startY = 0, base = 0;
+  player.addEventListener('pointerdown', e => {
+    if(e.target.closest('button,input,.seek')) return;
+    drag = true; startY = e.clientY; spring.stop(); base = spring.x;
+    vt.reset(); vt.add(e.clientY, e.timeStamp); player.setPointerCapture(e.pointerId);
+  });
+  player.addEventListener('pointermove', e => {
+    if(!drag) return;
+    let y = base + (e.clientY - startY);
+    if(y < 0) y = -rubberband(-y, player.offsetHeight);   // hacia arriba resiste
+    vt.add(e.clientY, e.timeStamp); spring.x = y; spring.v = 0; render(y);
+  });
+  const endDrag = () => {
+    if(!drag) return; drag = false;
+    const v = vt.v();
+    if(spring.x + project(v, .99) > player.offsetHeight * .6) hidePlayer(v);
+    else spring.to(0, { velocity:v, response:.35, damping: Math.abs(v) > 300 ? .8 : 1 });
+  };
+  player.addEventListener('pointerup', endDrag);
+  player.addEventListener('pointercancel', endDrag);
+})();
+
+/* ---------- hoja del kit gratis: sube con resorte, se arrastra y se lanza para cerrar ---------- */
+(function(){
+  const sheet = $('#sheet'), scrim = $('#scrim'), email = $('#email'), field = $('#field'), msg = $('#fieldMsg');
+  let H = 0, isOpen = false, lastFocus = null;
+  const render = y => {
+    sheet.style.transform = `translate(-50%, ${y}px)`;
+    scrim.style.opacity = H ? Math.max(0, Math.min(1, 1 - y / H)) : 0;
+  };
+  const spring = new Spring(0, render);
+  const show = on => { sheet.style.visibility = scrim.style.visibility = on ? 'visible' : 'hidden'; };
+
+  function open(){
+    lastFocus = document.activeElement;
+    sheet.classList.remove('done'); field.classList.remove('error'); msg.textContent = '';
+    show(true); H = sheet.offsetHeight;
+    if(!isOpen && !spring.raf) spring.set(H);          // si se estaba cerrando, sigue desde donde va
+    isOpen = true; document.body.classList.add('sheet-open');
+    spring.to(0, { response:.42, damping:1 });         // abierta con un toque: sin rebote
+    if(matchMedia('(hover:hover)').matches) email.focus({ preventScroll:true });
+  }
+  function close(velocity){
+    isOpen = false; document.body.classList.remove('sheet-open');
+    spring.to(H, { response:.38, damping:1, velocity, onRest: () => { if(!isOpen) show(false); } });
+    lastFocus && lastFocus.focus && lastFocus.focus({ preventScroll:true });
+  }
+  $$('[data-open-sheet]').forEach(b => b.addEventListener('click', open));
+  $('#sheetClose').addEventListener('click', () => close());
+  scrim.addEventListener('click', () => close());
+  $$('[data-close-sheet]').forEach(a => a.addEventListener('click', () => close()));
+  addEventListener('keydown', e => { if(e.key === 'Escape' && isOpen) close(); });
+  addEventListener('resize', () => { if(isOpen){ H = sheet.offsetHeight; } });
+
+  const vt = tracker(); let dragging = false, startY = 0, base = 0, moved = false;
+  [$('#sheetGrab'), $('#sheetHead')].forEach(el => {
+    el.addEventListener('pointerdown', e => {
+      dragging = true; moved = false; startY = e.clientY; spring.stop(); base = spring.x;
+      vt.reset(); vt.add(e.clientY, e.timeStamp); el.setPointerCapture(e.pointerId);
+    });
+    el.addEventListener('pointermove', e => {
+      if(!dragging) return;
+      let y = base + (e.clientY - startY);
+      if(Math.abs(e.clientY - startY) > 4) moved = true;
+      if(y < 0) y = -rubberband(-y, H);
+      vt.add(e.clientY, e.timeStamp); spring.x = y; spring.v = 0; render(y);
+    });
+    const end = () => {
+      if(!dragging) return; dragging = false;
+      const v = vt.v();
+      if(!moved && el.id === 'sheetGrab'){ close(); return; }
+      if(spring.x + project(v, .99) > H * .5) close(v);
+      else { isOpen = true; spring.to(0, { velocity:v, response:.35, damping: Math.abs(v) > 300 ? .8 : 1 }); }
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  });
+
+  // validación en línea: el error se va apenas corrigen
+  const valid = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+  email.addEventListener('input', () => { if(field.classList.contains('error') && valid(email.value.trim())){ field.classList.remove('error'); msg.textContent = ''; } });
+  $('#freeForm').addEventListener('submit', e => {
+    e.preventDefault();
+    if(!valid(email.value.trim())){
+      field.classList.add('error'); msg.textContent = '⚠ Revisa el email: falta algo como nombre@gmail.com';
+      email.focus(); return;
+    }
+    sendToAweber(email.value.trim());
+    deliverInferno(email.value.trim(), () => {
+      sheet.classList.remove('done'); field.classList.add('error');
+      msg.textContent = '⚠ No se pudo preparar la descarga. Intenta de nuevo.';
+    });
+    sheet.classList.add('done');
+    H = sheet.offsetHeight; spring.set(0);
+    if(navigator.vibrate) navigator.vibrate(15);
+    if(!reduceMotion.matches){
+      const box = sheet.querySelector('.sheet-done');
+      box.style.position = 'relative';
+      for(let i = 0; i < 12; i++){
+        const a = (i / 12) * Math.PI * 2 + Math.random() * .4, d = 46 + Math.random() * 40, s = .45 + Math.random() * .7;
+        box.insertAdjacentHTML('beforeend', '<svg class="burst" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0c.7 6.6 2.8 9.1 12 12-9.2 2.9-11.3 5.4-12 12-.7-6.6-2.8-9.1-12-12 9.2-2.9 11.3-5.4 12-12z"/></svg>');
+        const el = box.lastElementChild;
+        el.animate([
+          { transform:'translate(0,0) scale(0) rotate(0deg)', opacity:1 },
+          { transform:`translate(${Math.cos(a) * d * .8}px,${Math.sin(a) * d * .8}px) scale(${s}) rotate(60deg)`, opacity:1, offset:.6 },
+          { transform:`translate(${Math.cos(a) * d}px,${Math.sin(a) * d}px) scale(0) rotate(120deg)`, opacity:0 }
+        ], { duration:850 + Math.random() * 300, easing:'cubic-bezier(.2,.8,.2,1)', delay:120 }).onfinish = () => el.remove();
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

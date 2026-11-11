@@ -20,7 +20,7 @@ import {
   uploadAudioMasterDeterministic,
   uploadCoverDeterministic,
   checkFileExistsInStorage
-} from './supabaseServer';
+} from './supabaseServer.ts';
 
 export const DEMO_ITEM_IDS = new Set([
   'os-01', 'os-02', 'os-03', 'os-04',

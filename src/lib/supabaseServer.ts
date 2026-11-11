@@ -4,7 +4,7 @@
  * Utilizes the Service Role Key exclusively on the server side (Node.js/Express).
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import path from 'path';
 
 export function sanitizeSupabaseUrl(url: string): string {
