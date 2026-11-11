@@ -2,7 +2,8 @@
  * ANOMALY SOUND - Backend Server
  * Express + Vite middleware full-stack server
  * Provides protected admin endpoints, persistent catalog database, Supabase PostgreSQL/Storage integration,
- * PayPal Sandbox checkout with idempotent capture, robust session revocation, and secure audio streaming.
+ * Sistema de compras directas mediante WhatsApp, descarga de archivos originales master,
+ * revocación robusta de sesiones y streaming de preescucha seguro.
  */
 
 import dotenv from 'dotenv';
@@ -74,27 +75,31 @@ if (!fs.existsSync(AUDIO_UPLOADS_DIR)) fs.mkdirSync(AUDIO_UPLOADS_DIR, { recursi
 if (!fs.existsSync(COVERS_UPLOADS_DIR)) fs.mkdirSync(COVERS_UPLOADS_DIR, { recursive: true });
 
 // Admin credentials & token configuration
-// In production, ADMIN_SECRET MUST be strictly configured via environment variables.
 let ADMIN_SECRET = process.env.ADMIN_SECRET;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@anomalysound.com';
+const ADMIN_SECRET_FILE = path.join(DATA_DIR, '.admin_secret');
 
 if (!ADMIN_SECRET) {
-  ADMIN_SECRET = crypto.randomBytes(32).toString('hex');
-  console.warn('[SEGURIDAD] ADMIN_SECRET no definido. Se generó clave efímera para firma.');
+  if (fs.existsSync(ADMIN_SECRET_FILE)) {
+    try {
+      ADMIN_SECRET = fs.readFileSync(ADMIN_SECRET_FILE, 'utf-8').trim();
+    } catch {}
+  }
+  if (!ADMIN_SECRET) {
+    ADMIN_SECRET = crypto.randomBytes(32).toString('hex');
+    try {
+      fs.writeFileSync(ADMIN_SECRET_FILE, ADMIN_SECRET, 'utf-8');
+    } catch {}
+  }
 }
 
 if (!ADMIN_PASSWORD) {
   console.warn('[SEGURIDAD] Advertencia: ADMIN_PASSWORD no está definido en variables de entorno.');
 }
 
-// PayPal Configuration
-const PAYPAL_ENV = process.env.PAYPAL_ENV || 'sandbox';
-const PAYPAL_BASE_URL = PAYPAL_ENV === 'production'
-  ? 'https://api-m.paypal.com'
-  : 'https://api-m.sandbox.paypal.com';
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
-const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+// Configuración de WhatsApp para ventas directas
+const WHATSAPP_NUMBER = process.env.WHATSAPP_NUMBER || '';
 
 // Local in-memory structures for DEVELOPMENT ONLY (when Supabase is not configured)
 interface LocalPendingOrder {
@@ -108,7 +113,6 @@ interface LocalPendingOrder {
   status: 'CREATED' | 'COMPLETED' | 'CANCELLED';
   createdAt: number;
   capturedAt?: number;
-  paypalCaptureId?: string;
 }
 
 interface LocalSecureDownloadToken {
@@ -122,9 +126,6 @@ interface LocalSecureDownloadToken {
 
 const localPendingOrders = new Map<string, LocalPendingOrder>();
 const localSecureDownloads = new Map<string, LocalSecureDownloadToken>();
-
-// In-flight locking map for PayPal capture to guarantee absolute idempotency under simultaneous requests
-const inFlightCaptureLocks = new Map<string, Promise<any>>();
 
 // Cookie parsing helper
 function parseCookies(cookieHeader?: string): Record<string, string> {
@@ -331,41 +332,6 @@ function saveLocalOrderRecord(record: LocalOrderRecord) {
   }
 }
 
-// PayPal OAuth access token caching
-let cachedAccessToken: { token: string; expiresAt: number } | null = null;
-
-async function getPayPalAccessToken(): Promise<string> {
-  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-    throw new Error('PAYPAL_CLIENT_ID o PAYPAL_CLIENT_SECRET no están configurados en las variables de entorno del servidor.');
-  }
-
-  if (cachedAccessToken && Date.now() < cachedAccessToken.expiresAt) {
-    return cachedAccessToken.token;
-  }
-
-  const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
-  const response = await fetch(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: 'grant_type=client_credentials'
-  });
-
-  const data = await response.json();
-  if (!response.ok || !data.access_token) {
-    console.error('Error fetching PayPal access token:', data);
-    throw new Error(`Fallo al autenticar con PayPal Sandbox: ${data.error_description || data.error || 'Credenciales inválidas'}`);
-  }
-
-  cachedAccessToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in - 60) * 1000
-  };
-
-  return data.access_token;
-}
 
 export interface SoundItemDb {
   id: string;
@@ -935,7 +901,7 @@ async function startServer() {
       res.cookie('anomaly_admin_session', sessionToken, {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'strict',
+        sameSite: isProduction ? 'strict' : 'lax',
         path: '/',
         maxAge: 8 * 60 * 60 * 1000 // 8 hours
       });
@@ -1602,541 +1568,88 @@ async function startServer() {
     }
   });
 
-  // --- 1. PAYPAL CONFIGURATION ROUTE (Public Client ID only) ---
-  app.get('/api/paypal/config', (req: Request, res: Response) => {
+  // --- 1. CONFIGURACIÓN PÚBLICA (WhatsApp, etc.) ---
+  app.get('/api/config', (req: Request, res: Response) => {
     res.json({
-      clientId: PAYPAL_CLIENT_ID,
-      environment: PAYPAL_ENV,
-      currency: 'USD',
-      isConfigured: Boolean(PAYPAL_CLIENT_ID && PAYPAL_CLIENT_SECRET)
+      whatsappNumber: (process.env.WHATSAPP_NUMBER || '').trim()
     });
   });
 
-  // --- 2. PAYPAL CREATE ORDER ROUTE (Server authoritative price & currency) ---
-  app.post('/api/paypal/create-order', async (req: Request, res: Response) => {
+  // --- 2. DESCARGA DIRECTA DE ARCHIVO ORIGINAL AUTÉNTICO ---
+  // Transmite exactamente el archivo master (WAV, AIFF, MP3, ZIP) sin modificaciones ni conversiones
+  app.get('/api/download/item/:id', async (req: Request, res: Response) => {
+    const { id } = req.params;
+
     try {
-      const { itemId, buyerEmail, buyerName } = req.body;
-
-      if (!itemId) {
-        return res.status(400).json({ error: 'El parámetro itemId es obligatorio.' });
-      }
-
-      let itemTitle = '';
-      let itemFormat = 'WAV 24-bit';
-      let expectedAmount = '0.00';
-      const currency = 'USD';
+      let item: any = null;
 
       if (isSupabaseConfigured()) {
         try {
-          let supaItem = await getSoundItemByIdFromSupabase(itemId);
-          if (!supaItem) {
-            const localItems = readLocalDatabase();
-            const localItem = localItems.find((it) => it.id === itemId);
-            if (!localItem) {
-              return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo de Supabase.' });
-            }
-            // Auto-persistir en sound_items para garantizar que la restricción de clave foránea en orders no falle
-            await upsertSoundItemInSupabase({
-              id: localItem.id,
-              section: localItem.section,
-              title: localItem.title,
-              category: localItem.category,
-              bpm: localItem.bpm,
-              key: localItem.key,
-              duration: localItem.duration,
-              format: localItem.format,
-              file_size: localItem.fileSize,
-              cover_image: localItem.coverImage,
-              audio_url: localItem.audioUrl,
-              audio_storage_path: localItem.audioStoragePath,
-              synthetic_type: localItem.syntheticType,
-              is_free: localItem.isFree,
-              price: localItem.price,
-              is_published: localItem.isPublished,
-              downloads: localItem.downloads || 0,
-              description: localItem.description || ''
-            });
-            supaItem = await getSoundItemByIdFromSupabase(itemId);
+          const supaItem = await getSoundItemByIdFromSupabase(id);
+          if (supaItem) {
+            item = {
+              id: supaItem.id,
+              title: supaItem.title,
+              format: supaItem.format,
+              isFree: supaItem.is_free,
+              audioStoragePath: supaItem.audio_storage_path,
+              audioUrl: supaItem.audio_url
+            };
           }
-          if (!supaItem) {
-            return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo de Supabase.' });
-          }
-          if (supaItem.is_free || !supaItem.price || supaItem.price <= 0) {
-            return res.status(400).json({ error: 'Este elemento es gratuito y no requiere compra.' });
-          }
-          itemTitle = supaItem.title;
-          itemFormat = supaItem.format;
-          expectedAmount = Number(supaItem.price).toFixed(2);
-        } catch (supaErr: any) {
-          return res.status(503).json({
-            error: 'Error al consultar producto en Supabase.',
-            details: supaErr.message
-          });
+        } catch (e: any) {
+          console.warn('Supabase lookup error during download:', e.message);
         }
-      } else {
+      }
+
+      if (!item) {
         const localItems = readLocalDatabase();
-        const localItem = localItems.find((it) => it.id === itemId);
-        if (!localItem) {
-          return res.status(404).json({ error: 'El producto no fue encontrado en el catálogo local.' });
-        }
-        if (localItem.isFree || !localItem.price || localItem.price <= 0) {
-          return res.status(400).json({ error: 'Este elemento es gratuito y no requiere compra.' });
-        }
-        itemTitle = localItem.title;
-        itemFormat = localItem.format;
-        expectedAmount = Number(localItem.price).toFixed(2);
+        item = localItems.find((it) => it.id === id);
       }
 
-      if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-        return res.status(503).json({
-          error: 'Credenciales de PayPal Sandbox no configuradas en el servidor.',
-          requiresConfig: true
+      if (!item) {
+        return res.status(404).json({ error: 'El archivo solicitado no existe en el catálogo.' });
+      }
+
+      if (item.isFree === false) {
+        return res.status(403).json({
+          error: 'Este producto es de pago. Pulsa "COMPRAR" para coordinar la adquisición mediante WhatsApp.'
         });
       }
 
-      const accessToken = await getPayPalAccessToken();
-
-      const orderPayload = {
-        intent: 'CAPTURE',
-        purchase_units: [
-          {
-            reference_id: itemId,
-            custom_id: itemId,
-            description: `ANOMALY SOUND - ${itemTitle} (${itemFormat})`,
-            amount: {
-              currency_code: currency,
-              value: expectedAmount
-            }
+      // 1. Descarga desde Supabase Storage (Bucket privado 'anomaly-audio-masters')
+      if (item.audioStoragePath && isSupabaseConfigured()) {
+        const fileExists = await checkFileExistsInStorage('anomaly-audio-masters', item.audioStoragePath);
+        if (fileExists) {
+          const signedUrl = await createSignedAudioUrl(item.audioStoragePath, 3600);
+          if (signedUrl) {
+            return res.redirect(signedUrl);
           }
-        ],
-        application_context: {
-          brand_name: 'ANOMALY SOUND',
-          shipping_preference: 'NO_SHIPPING',
-          user_action: 'PAY_NOW'
         }
-      };
-
-      const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(orderPayload)
-      });
-
-      const orderData = await response.json();
-
-      if (!response.ok || !orderData.id) {
-        console.error('Error creating PayPal order:', orderData);
-        return res.status(response.status || 500).json({
-          error: 'Error al generar la orden en PayPal.',
-          details: orderData
-        });
       }
 
-      // Persist order status 'CREATED' in Supabase PostgreSQL (Production)
-      if (isSupabaseConfigured()) {
-        try {
-          await saveOrderInSupabase({
-            order_id: orderData.id,
-            item_id: itemId,
-            item_title: itemTitle,
-            amount: Number(expectedAmount),
-            currency,
-            buyer_email: buyerEmail || null,
-            buyer_name: buyerName || null,
-            status: 'CREATED',
-            created_at: new Date().toISOString()
-          });
-        } catch (dbErr: any) {
-          console.error('Error persisting created order in Supabase:', dbErr);
-          return res.status(500).json({
-            error: 'Error al registrar orden inicial en la base de datos.',
-            details: dbErr.message
-          });
+      // 2. Descarga desde disco local (/data/uploads/audio/)
+      const rawAudioPath = item.audioUrl || item.audioStoragePath;
+      if (rawAudioPath) {
+        const localFile = path.basename(rawAudioPath);
+        const fullPath = path.join(AUDIO_UPLOADS_DIR, localFile);
+        if (fs.existsSync(fullPath)) {
+          const stat = fs.statSync(fullPath);
+          if (stat.size > 0) {
+            const ext = path.extname(localFile) || '.wav';
+            const cleanTitle = (item.title || 'AUDIO').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const downloadFilename = `${cleanTitle}_ANOMALY_SOUND${ext}`;
+            return res.download(fullPath, downloadFilename);
+          }
         }
-      } else {
-        localPendingOrders.set(orderData.id, {
-          orderId: orderData.id,
-          itemId,
-          expectedAmount,
-          currency,
-          title: itemTitle,
-          buyerEmail,
-          buyerName,
-          status: 'CREATED',
-          createdAt: Date.now()
-        });
       }
 
-      return res.status(201).json({
-        success: true,
-        orderID: orderData.id
+      console.error(`[DESCARGA_FALLIDA] Archivo master original no encontrado para "${item.title}" (ID: ${item.id})`);
+      return res.status(404).json({
+        error: 'El archivo master original no se encuentra disponible físicamente en el almacenamiento.'
       });
     } catch (err: any) {
-      console.error('Create PayPal order error:', err);
-      return res.status(500).json({
-        error: err.message || 'Error interno al crear orden en PayPal.'
-      });
-    }
-  });
-
-  // --- 3. PAYPAL CAPTURE ORDER ROUTE (Strict Validation, Idempotent & Concurrency Safe) ---
-  app.post('/api/paypal/capture-order', async (req: Request, res: Response) => {
-    try {
-      const { orderID } = req.body;
-
-      if (!orderID) {
-        return res.status(400).json({ error: 'El parámetro orderID es obligatorio.' });
-      }
-
-      if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-        return res.status(503).json({
-          error: 'Credenciales de PayPal Sandbox no configuradas en el servidor.'
-        });
-      }
-
-      // IDEMPOTENCIA ANTE SOLICITUDES SIMULTÁNEAS (In-Flight Concurrency Lock)
-      if (inFlightCaptureLocks.has(orderID)) {
-        try {
-          const result = await inFlightCaptureLocks.get(orderID);
-          return res.status(result.status || 200).json(result.payload);
-        } catch (lockErr: any) {
-          return res.status(500).json({ error: lockErr.message });
-        }
-      }
-
-      // Resolver ejecución protegida por candado en memoria
-      const captureExecutionPromise = (async () => {
-        // -----------------------------------------------------------------------
-        // FLUJO DE PRODUCCIÓN: SUPABASE POSTGRESQL
-        // -----------------------------------------------------------------------
-        if (isSupabaseConfigured()) {
-          const claim = await claimOrderForCaptureInSupabase(orderID);
-
-          if (claim.status === 'NOT_FOUND') {
-            return {
-              status: 404,
-              payload: { error: 'Orden no encontrada en la base de datos de órdenes.' }
-            };
-          }
-
-          // IDEMPOTENCIA PERSISTENTE: Si la orden ya está COMPLETED en PostgreSQL, entregar el token existente
-          if (claim.status === 'ALREADY_COMPLETED') {
-            const existingToken = claim.token || (await getDownloadTokenByOrderId(orderID));
-            if (existingToken) {
-              return {
-                status: 200,
-                payload: {
-                  success: true,
-                  status: 'COMPLETED',
-                  orderID,
-                  transactionId: claim.order?.paypal_capture_id,
-                  downloadToken: existingToken.token,
-                  downloadUrl: `/api/download/secure/${existingToken.token}`,
-                  expiresAt: new Date(existingToken.expires_at).getTime(),
-                  message: 'La orden ya se encontraba capturada; se entrega la autorización de descarga correspondiente.'
-                }
-              };
-            }
-          }
-
-          // EXCLUSIÓN MUTUA ENTRE INSTANCIAS: Si otra instancia de Cloud Run está procesando la captura, esperar a que finalice
-          if (claim.status === 'IN_PROGRESS') {
-            for (let i = 0; i < 4; i++) {
-              await new Promise((r) => setTimeout(r, 750));
-              const fresh = await getOrderFromSupabase(orderID);
-              if (fresh?.status === 'COMPLETED') {
-                const freshToken = await getDownloadTokenByOrderId(orderID);
-                if (freshToken) {
-                  return {
-                    status: 200,
-                    payload: {
-                      success: true,
-                      status: 'COMPLETED',
-                      orderID,
-                      transactionId: fresh.paypal_capture_id,
-                      downloadToken: freshToken.token,
-                      downloadUrl: `/api/download/secure/${freshToken.token}`,
-                      expiresAt: new Date(freshToken.expires_at).getTime()
-                    }
-                  };
-                }
-              }
-            }
-            return {
-              status: 409,
-              payload: { error: 'La orden está siendo procesada concurrentemente por otra instancia. Por favor, reintenta en unos instantes.' }
-            };
-          }
-
-          const order = claim.order!;
-          const accessToken = await getPayPalAccessToken();
-
-          // Comprobar estado en PayPal
-          const checkRes = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderID}`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          });
-          const checkData = await checkRes.json();
-
-          if (!checkRes.ok) {
-            await releaseOrderClaimInSupabase(orderID);
-            return {
-              status: checkRes.status || 500,
-              payload: { error: 'Error al consultar estado de la orden en PayPal.', details: checkData }
-            };
-          }
-
-          const purchaseUnit = checkData.purchase_units?.[0];
-          const referenceId = purchaseUnit?.reference_id || purchaseUnit?.custom_id;
-
-          // VALIDACIÓN 1: Verificar que la captura pertenece exactamente a la orden y producto de Supabase
-          if (referenceId && referenceId !== order.item_id) {
-            await releaseOrderClaimInSupabase(orderID);
-            return {
-              status: 400,
-              payload: {
-                error: 'Discrepancia de producto: La orden de PayPal no corresponde al producto registrado en la base de datos.',
-                expectedItem: order.item_id,
-                receivedItem: referenceId
-              }
-            };
-          }
-
-          let capturePaymentId = '';
-
-          // VALIDACIÓN 2: Si PayPal ya devuelve la orden como COMPLETED, validar SIEMPRE importe y moneda
-          if (checkData.status === 'COMPLETED') {
-            const capturePayment = purchaseUnit?.payments?.captures?.[0];
-            capturePaymentId = capturePayment?.id || '';
-
-            const capturedAmount = capturePayment?.amount?.value;
-            const capturedCurrency = capturePayment?.amount?.currency_code;
-
-            if (
-              capturedCurrency !== order.currency ||
-              Number(capturedAmount) !== Number(order.amount)
-            ) {
-              await releaseOrderClaimInSupabase(orderID);
-              return {
-                status: 400,
-                payload: {
-                  error: 'Discrepancia de importe o divisa en orden completada.',
-                  expected: `${order.amount} ${order.currency}`,
-                  received: `${capturedAmount} ${capturedCurrency}`
-                }
-              };
-            }
-          } else if (checkData.status === 'APPROVED') {
-            // Ejecutar captura en PayPal
-            const captureResponse = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderID}/capture`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-              }
-            });
-            const captureData = await captureResponse.json();
-
-            if (!captureResponse.ok || captureData.status !== 'COMPLETED') {
-              console.error('PayPal capture error response:', captureData);
-              await releaseOrderClaimInSupabase(orderID);
-              return {
-                status: captureResponse.status || 500,
-                payload: { error: 'Error de PayPal al capturar el pago.', details: captureData }
-              };
-            }
-
-            const capturedPU = captureData.purchase_units?.[0];
-            const capturePayment = capturedPU?.payments?.captures?.[0];
-            capturePaymentId = capturePayment?.id || '';
-
-            // VALIDACIÓN 3: Validación estricta de importe y moneda tras la captura
-            const capturedAmount = capturePayment?.amount?.value;
-            const capturedCurrency = capturePayment?.amount?.currency_code;
-
-            if (
-              capturedCurrency !== order.currency ||
-              Number(capturedAmount) !== Number(order.amount)
-            ) {
-              await releaseOrderClaimInSupabase(orderID);
-              return {
-                status: 400,
-                payload: {
-                  error: 'Discrepancia en el importe o moneda capturada.',
-                  expected: `${order.amount} ${order.currency}`,
-                  received: `${capturedAmount} ${capturedCurrency}`
-                }
-              };
-            }
-          } else {
-            await releaseOrderClaimInSupabase(orderID);
-            return {
-              status: 400,
-              payload: {
-                error: `La orden de PayPal no está en estado APPROVED ni COMPLETED (recibido: ${checkData.status}).`
-              }
-            };
-          }
-
-          // Actualizar orden en PostgreSQL a COMPLETED
-          await saveOrderInSupabase({
-            ...order,
-            status: 'COMPLETED',
-            paypal_capture_id: capturePaymentId,
-            captured_at: new Date().toISOString()
-          });
-
-          // Garantizar UN ÚNICO token por orden
-          const tokenStr = crypto.randomBytes(32).toString('hex');
-          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-          const tokenResult = await createDownloadTokenInSupabase(
-            tokenStr,
-            orderID,
-            order.item_id,
-            order.buyer_email,
-            expiresAt
-          );
-
-          return {
-            status: 200,
-            payload: {
-              success: true,
-              status: 'COMPLETED',
-              orderID,
-              transactionId: capturePaymentId,
-              downloadToken: tokenResult.token,
-              downloadUrl: `/api/download/secure/${tokenResult.token}`,
-              expiresAt: expiresAt.getTime(),
-              item: {
-                id: order.item_id,
-                title: order.item_title
-              }
-            }
-          };
-        }
-
-        // -----------------------------------------------------------------------
-        // FLUJO DE DESARROLLO LOCAL
-        // -----------------------------------------------------------------------
-        const pending = localPendingOrders.get(orderID);
-        if (!pending) {
-          return { status: 404, payload: { error: 'Orden no encontrada en este servidor.' } };
-        }
-
-        if (pending.status === 'COMPLETED') {
-          for (const [token, info] of localSecureDownloads.entries()) {
-            if (info.orderId === orderID) {
-              return {
-                status: 200,
-                payload: {
-                  success: true,
-                  status: 'COMPLETED',
-                  orderID,
-                  transactionId: pending.paypalCaptureId,
-                  downloadToken: token,
-                  downloadUrl: `/api/download/secure/${token}`,
-                  expiresAt: info.expiresAt
-                }
-              };
-            }
-          }
-        }
-
-        const accessToken = await getPayPalAccessToken();
-        const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderID}/capture`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        });
-        const captureData = await response.json();
-
-        if (!response.ok || captureData.status !== 'COMPLETED') {
-          return {
-            status: response.status || 500,
-            payload: { error: 'Error de PayPal al capturar el pago local.', details: captureData }
-          };
-        }
-
-        const purchaseUnit = captureData.purchase_units?.[0];
-        const capturePayment = purchaseUnit?.payments?.captures?.[0];
-
-        const capturedAmount = capturePayment?.amount?.value;
-        const capturedCurrency = capturePayment?.amount?.currency_code;
-        if (
-          capturedCurrency !== pending.currency ||
-          Number(capturedAmount) !== Number(pending.expectedAmount)
-        ) {
-          return {
-            status: 400,
-            payload: { error: 'Discrepancia en importe o moneda capturada local.' }
-          };
-        }
-
-        pending.status = 'COMPLETED';
-        pending.capturedAt = Date.now();
-        pending.paypalCaptureId = capturePayment?.id;
-
-        saveLocalOrderRecord({
-          orderId: orderID,
-          captureId: capturePayment?.id || '',
-          itemId: pending.itemId,
-          itemTitle: pending.title,
-          amount: pending.expectedAmount,
-          currency: pending.currency,
-          buyerEmail: pending.buyerEmail || captureData.payer?.email_address,
-          buyerName: pending.buyerName,
-          timestamp: Date.now()
-        });
-
-        const downloadToken = crypto.randomBytes(32).toString('hex');
-        const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
-
-        localSecureDownloads.set(downloadToken, {
-          token: downloadToken,
-          itemId: pending.itemId,
-          orderId: orderID,
-          buyerEmail: pending.buyerEmail || captureData.payer?.email_address,
-          expiresAt,
-          downloadCount: 0
-        });
-
-        return {
-          status: 200,
-          payload: {
-            success: true,
-            status: 'COMPLETED',
-            orderID,
-            transactionId: capturePayment?.id,
-            downloadToken,
-            downloadUrl: `/api/download/secure/${downloadToken}`,
-            expiresAt,
-            item: {
-              id: pending.itemId,
-              title: pending.title
-            }
-          }
-        };
-      })();
-
-      inFlightCaptureLocks.set(orderID, captureExecutionPromise);
-
-      try {
-        const result = await captureExecutionPromise;
-        return res.status(result.status || 200).json(result.payload);
-      } finally {
-        inFlightCaptureLocks.delete(orderID);
-      }
-    } catch (err: any) {
-      console.error('Capture PayPal order error:', err);
-      return res.status(500).json({
-        error: err.message || 'Error interno al capturar el pago en PayPal.'
-      });
+      console.error('Error procesando descarga de item:', err);
+      return res.status(500).json({ error: 'Error interno al procesar la descarga.', details: err.message });
     }
   });
 

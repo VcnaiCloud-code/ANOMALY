@@ -1,17 +1,18 @@
 /**
  * ANOMALY SOUND
- * Plataforma profesional de sonido: ONE SHOTS, BEATS y SAMPLES.
+ * Plataforma profesional de sonido: LIBRERÍAS, BEATS y SAMPLES.
  * Diseño Glassmorphism oscuro, futurista y minimalista.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
 import { AdminRoute } from './components/AdminRoute';
-import { SoundCheckoutModal } from './components/SoundCheckoutModal';
 import { CatalogSection, SoundItem } from './types/sound';
 import {
   getStoredCatalogItems,
   fetchPublicCatalogApi,
-  saveLead
+  saveLead,
+  fetchAppConfig,
+  buildWhatsAppPurchaseUrl
 } from './utils/storage';
 import {
   getAudioContext,
@@ -40,13 +41,26 @@ export default function App() {
     };
   }, []);
 
-  // 2. Catálogo de sonidos dinámicos (ONE SHOTS, BEATS, SAMPLES)
+  // 2. Catálogo de sonidos dinámicos (LIBRERÍAS, BEATS, SAMPLES)
   const [catalogItems, setCatalogItems] = useState<SoundItem[]>(getStoredCatalogItems());
 
   useEffect(() => {
     fetchPublicCatalogApi().then((items) => {
       if (Array.isArray(items)) {
         setCatalogItems(items);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // 2.1 Configuración de WhatsApp desde servidor / entorno
+  const [whatsappNumber, setWhatsappNumber] = useState<string>(
+    (import.meta as any).env?.VITE_WHATSAPP_NUMBER || ''
+  );
+
+  useEffect(() => {
+    fetchAppConfig().then((cfg) => {
+      if (cfg?.whatsappNumber) {
+        setWhatsappNumber(cfg.whatsappNumber);
       }
     }).catch(() => {});
   }, []);
@@ -60,13 +74,10 @@ export default function App() {
   const [emailInput, setEmailInput] = useState('');
   const [emailError, setEmailError] = useState('');
 
-  // 3.1 Modal de Checkout para productos de pago
-  const [checkoutTargetItem, setCheckoutTargetItem] = useState<SoundItem | null>(null);
-  const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
-
-  function openCheckout(item: SoundItem) {
-    setCheckoutTargetItem(item);
-    setIsCheckoutModalOpen(true);
+  // 3.1 Proceso de compra directa vía WhatsApp
+  function handleBuyWhatsApp(item: SoundItem) {
+    const url = buildWhatsAppPurchaseUrl(item, whatsappNumber);
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 
   // 4. Reproductor flotante
@@ -204,30 +215,41 @@ export default function App() {
     }
   }
 
-  // Descarga directa de archivo de audio original sin recomprimir
-  function triggerDownloadWav(item: SoundItem) {
-    if (item.audioUrl) {
+  // Descarga directa del archivo master original sin recomprimir ni alterar
+  async function triggerDownloadWav(item: SoundItem) {
+    // 1. Si existe URL directa (data: o http:), descargar directamente el archivo original
+    if (item.audioUrl && (item.audioUrl.startsWith('data:') || item.audioUrl.startsWith('blob:') || item.audioUrl.startsWith('http'))) {
       const a = document.createElement('a');
       a.href = item.audioUrl;
-      const ext = item.format.includes('MP3') ? 'mp3' : 'wav';
-      a.download = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.${ext}`;
+      const ext = (item.format || 'WAV').toLowerCase().replace(/[^a-z0-9]/g, '');
+      a.download = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.${ext || 'wav'}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       return;
     }
 
-    const filename = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.wav`;
-    const content = `ANOMALY SOUND - MASTER AUDIO FILE\nNombre: ${item.title}\nCategoría: ${item.category}\nFormato: ${item.format}\nLicencia: 100% Royalty-Free Comercial\nCalidad: 24-bit PCM Master`;
-    const blob = new Blob([content], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    // 2. Si existe identificador en el servidor, usar la ruta oficial de descarga del archivo master
+    if (item.id) {
+      try {
+        const downloadEndpoint = `/api/download/item/${encodeURIComponent(item.id)}`;
+        const res = await fetch(downloadEndpoint, { method: 'HEAD' });
+        if (res.ok) {
+          const a = document.createElement('a');
+          a.href = downloadEndpoint;
+          a.setAttribute('download', '');
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          return;
+        }
+      } catch (err) {
+        console.error('Error al solicitar descarga desde el servidor:', err);
+      }
+    }
+
+    // 3. Si no hay archivo real cargado en el servidor, mostrar aviso honesto (nunca archivos falsos)
+    alert(`El archivo original de "${item.title}" no se encuentra cargado en el servidor actualmente.`);
   }
 
   function openDownloadSheet(item: SoundItem) {
@@ -262,7 +284,9 @@ export default function App() {
   }
 
   function scrollToAnchor(id: string) {
-    const el = document.getElementById(id);
+    let targetId = id;
+    if (id === 'one-shots') targetId = 'librerias';
+    const el = document.getElementById(targetId) || document.getElementById(id);
     if (el) {
       const headerH = 75;
       const y = id === 'top' ? 0 : el.getBoundingClientRect().top + window.scrollY - headerH;
@@ -326,10 +350,10 @@ export default function App() {
         {/* Navegación por los 3 grandes apartados */}
         <nav className="nav" aria-label="Secciones">
           <a
-            href="#one-shots"
+            href="#librerias"
             onClick={(e) => {
               e.preventDefault();
-              scrollToAnchor('one-shots');
+              scrollToAnchor('librerias');
             }}
           >
             Librerías
@@ -381,7 +405,7 @@ export default function App() {
           <button
             className={`header-cta ${headerCtaVisible ? 'show' : ''}`}
             id="headerCta"
-            onClick={() => scrollToAnchor('one-shots')}
+            onClick={() => scrollToAnchor('librerias')}
             aria-label="Explorar catálogo"
           >
             <img src="/src/assets/images/hero_sound_sculpture_1793944360196.jpg" alt="" />
@@ -416,7 +440,7 @@ export default function App() {
                 ref={heroCtaRef}
                 className="btn btn-dl"
                 id="heroCta"
-                onClick={() => scrollToAnchor('one-shots')}
+                onClick={() => scrollToAnchor('librerias')}
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
@@ -442,7 +466,7 @@ export default function App() {
       </section>
 
       {/* ---------- 2. CATÁLOGO: LIBRERÍAS ---------- */}
-      <section className="section" id="one-shots">
+      <section className="section" id="librerias">
         <div className="wrap">
           <div className="section-head reveal">
             <div>
@@ -527,7 +551,7 @@ export default function App() {
                     ) : (
                       <button
                         className="btn btn-red btn-sm"
-                        onClick={() => openCheckout(item)}
+                        onClick={() => handleBuyWhatsApp(item)}
                         aria-label={`Comprar ${item.title}`}
                       >
                         <span>Comprar</span>
@@ -625,7 +649,7 @@ export default function App() {
                     ) : (
                       <button
                         className="btn btn-red btn-sm"
-                        onClick={() => openCheckout(beat)}
+                        onClick={() => handleBuyWhatsApp(beat)}
                         aria-label={`Comprar licencia de ${beat.title}`}
                       >
                         <span>Comprar</span>
@@ -723,7 +747,7 @@ export default function App() {
                     ) : (
                       <button
                         className="btn btn-red btn-sm"
-                        onClick={() => openCheckout(sample)}
+                        onClick={() => handleBuyWhatsApp(sample)}
                         aria-label={`Comprar ${sample.title}`}
                       >
                         <span>Comprar</span>
@@ -958,12 +982,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* ---------- VENTANA MODAL DE CHECKOUT PARA PRODUCTOS DE PAGO ---------- */}
-      <SoundCheckoutModal
-        item={checkoutTargetItem}
-        isOpen={isCheckoutModalOpen}
-        onClose={() => setIsCheckoutModalOpen(false)}
-      />
     </div>
   );
 }

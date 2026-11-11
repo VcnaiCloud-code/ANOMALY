@@ -1312,10 +1312,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
                           {/* 4. Descarga del master original para verificación */}
                           <a
-                            href={item.audioUrl || `/api/download/${item.id}`}
-                            download={`${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.wav`}
+                            href={`/api/download/item/${item.id}`}
+                            download
                             className="p-2 rounded-xl bg-white/[0.05] hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
-                            title="Descargar archivo actual para verificación"
+                            title="Descargar archivo original para verificación"
                           >
                             <Download className="w-3.5 h-3.5" />
                           </a>

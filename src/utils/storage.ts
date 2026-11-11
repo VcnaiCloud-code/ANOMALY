@@ -259,7 +259,7 @@ export function getStorageConfig(): StorageConfig {
         r2AccountId: '',
         r2Endpoint: '',
         stripePublicKey: '',
-        paypalClientId: ''
+        whatsappNumber: ''
       };
       localStorage.setItem('anomaly_storage_config', JSON.stringify(defaultCfg));
       return defaultCfg;
@@ -332,6 +332,7 @@ export function setAdminToken(token: string | null): void {
   try {
     if (token) {
       sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+      localStorage.setItem(ADMIN_TOKEN_KEY, token);
     } else {
       sessionStorage.removeItem(ADMIN_TOKEN_KEY);
       localStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -766,7 +767,7 @@ export async function uploadFileApi(
       'x-file-kind': kind,
       'x-file-size': String(file.size)
     };
-    if (token) streamHeaders['Authorization'] = `Bearer ${token}`;
+    if (authToken) streamHeaders['Authorization'] = `Bearer ${authToken}`;
 
     const res = await fetch('/api/admin/upload-stream', {
       method: 'POST',
@@ -787,6 +788,92 @@ export async function uploadFileApi(
   } catch (err: any) {
     return { success: false, error: err.message || 'Error de conexión al subir archivo' };
   }
+}
+
+// -------------------------------------------------------------
+// CONFIGURACIÓN GLOBAL Y WHATSAPP COMPRAS
+// -------------------------------------------------------------
+let cachedAppConfig: { whatsappNumber: string } | null = null;
+
+export async function fetchAppConfig(): Promise<{ whatsappNumber: string }> {
+  if (cachedAppConfig) return cachedAppConfig;
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) {
+      const data = await res.json();
+      cachedAppConfig = {
+        whatsappNumber: (data.whatsappNumber || (import.meta as any).env?.VITE_WHATSAPP_NUMBER || '').trim()
+      };
+      return cachedAppConfig;
+    }
+  } catch {
+    // Fallback silencioso
+  }
+  cachedAppConfig = {
+    whatsappNumber: ((import.meta as any).env?.VITE_WHATSAPP_NUMBER || '').trim()
+  };
+  return cachedAppConfig;
+}
+
+export function buildWhatsAppPurchaseUrl(item: SoundItem, whatsappNumber?: string): string {
+  const lines: string[] = [
+    'Hola, quiero comprar este producto de ANOMALY SOUND.',
+    '',
+    `Producto: ${item.title}`
+  ];
+
+  if (item.category && item.category.trim()) {
+    lines.push(`Categoría: ${item.category.trim()}`);
+  }
+
+  const priceStr = typeof item.price === 'number' && item.price > 0 ? `$${item.price.toFixed(2)} USD` : 'A convenir';
+  lines.push(`Precio: ${priceStr}`);
+
+  // Archivo original si está disponible
+  const filename = item.audioUrl
+    ? item.audioUrl.split('/').pop()
+    : item.audioStoragePath
+    ? item.audioStoragePath.split('/').pop()
+    : '';
+  if (filename) {
+    lines.push(`Archivo: ${filename}`);
+  }
+
+  if (item.format) {
+    lines.push(`Formato: ${item.format}`);
+  }
+
+  // Información técnica
+  const techDetails: string[] = [];
+  if (item.bpm) techDetails.push(`${item.bpm} BPM`);
+  if (item.key) techDetails.push(`Key ${item.key}`);
+  if (item.duration) techDetails.push(`${item.duration}s`);
+  if (item.fileSize) techDetails.push(item.fileSize);
+  if (techDetails.length > 0) {
+    lines.push(`Detalles técnicos: ${techDetails.join(' | ')}`);
+  }
+
+  if (item.description && item.description.trim()) {
+    lines.push(`Información: ${item.description.trim()}`);
+  }
+
+  lines.push(`ID del producto: ${item.id}`);
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    lines.push(`Enlace: ${window.location.origin}/#${item.section || 'catalogo'}`);
+  }
+
+  lines.push('');
+  lines.push('Quisiera información para realizar el pago y recibir el archivo.');
+
+  const fullText = lines.join('\n');
+  const encoded = encodeURIComponent(fullText);
+
+  const cleanNumber = (whatsappNumber || '').replace(/[^0-9]/g, '');
+  if (cleanNumber) {
+    return `https://wa.me/${cleanNumber}?text=${encoded}`;
+  }
+  return `https://wa.me/?text=${encoded}`;
 }
 
 

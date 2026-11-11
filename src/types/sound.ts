@@ -99,7 +99,7 @@ export interface Order {
   subtotal: number;
   discount: number;
   total: number;
-  paymentMethod: 'stripe' | 'paypal' | 'mercadopago' | 'crypto' | 'free_checkout';
+  paymentMethod: 'stripe' | 'mercadopago' | 'crypto' | 'free_checkout' | 'whatsapp';
   status: 'completed' | 'processing';
   createdAt: string;
   downloadAccessList: {
@@ -130,5 +130,5 @@ export interface StorageConfig {
   r2AccessKeyId?: string;
   r2Endpoint?: string;
   stripePublicKey?: string;
-  paypalClientId?: string;
+  whatsappNumber?: string;
 }
