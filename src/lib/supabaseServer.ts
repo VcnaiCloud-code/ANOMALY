@@ -396,6 +396,18 @@ export async function createSignedAudioUrl(
   }
 }
 
+export function getPublicStorageUrl(bucket: string, storagePath: string): string | null {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return null;
+  try {
+    const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+    return data?.publicUrl || null;
+  } catch (err) {
+    console.warn('Error obtaining public storage URL:', err);
+    return null;
+  }
+}
+
 // -----------------------------------------------------------------------------
 // ÓRDENES Y DESCARGAS SEGURAS EN SUPABASE POSTGRESQL
 // -----------------------------------------------------------------------------

@@ -204,30 +204,15 @@ export default function App() {
     }
   }
 
-  // Descarga directa de archivo de audio original sin recomprimir
+  // Descarga auténtica del archivo master original sin conversiones ni recompresión
   function triggerDownloadWav(item: SoundItem) {
-    if (item.audioUrl) {
-      const a = document.createElement('a');
-      a.href = item.audioUrl;
-      const ext = item.format.includes('MP3') ? 'mp3' : 'wav';
-      a.download = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      return;
-    }
-
-    const filename = `${item.title.replace(/\s+/g, '_')}_ANOMALY_SOUND.wav`;
-    const content = `ANOMALY SOUND - MASTER AUDIO FILE\nNombre: ${item.title}\nCategoría: ${item.category}\nFormato: ${item.format}\nLicencia: 100% Royalty-Free Comercial\nCalidad: 24-bit PCM Master`;
-    const blob = new Blob([content], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
+    const downloadUrl = `/api/download/free/${encodeURIComponent(item.id)}`;
     const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
+    a.href = downloadUrl;
+    a.setAttribute('download', '');
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
   function openDownloadSheet(item: SoundItem) {
