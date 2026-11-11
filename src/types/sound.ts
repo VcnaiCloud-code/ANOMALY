@@ -99,7 +99,7 @@ export interface Order {
   subtotal: number;
   discount: number;
   total: number;
-  paymentMethod: 'whatsapp' | 'free_checkout' | 'manual';
+  paymentMethod: 'whatsapp' | 'free_checkout' | 'manual' | 'stripe' | 'paypal' | 'mercadopago' | 'crypto';
   status: 'completed' | 'processing';
   createdAt: string;
   downloadAccessList: {
