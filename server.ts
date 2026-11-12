@@ -8,7 +8,8 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -46,13 +47,13 @@ import {
   createSignedUploadUrlInSupabase,
   claimOrderForCaptureInSupabase,
   releaseOrderClaimInSupabase
-} from './src/lib/supabaseServer';
+} from './src/lib/supabaseServer.ts';
 
 import {
   runLocalToSupabaseMigration,
   DEMO_ITEM_IDS,
   isDemoItem
-} from './src/lib/migrationService';
+} from './src/lib/migrationService.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
