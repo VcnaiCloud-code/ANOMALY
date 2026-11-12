@@ -68,40 +68,24 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
 
   const itemPrice = item.price || 0;
   const productTypeLabel =
-    item.section === 'one_shots' ? 'ONE SHOT' : item.section === 'beats' ? 'BEAT' : 'SAMPLE LOOP';
+    item.section === 'one_shots' ? 'LIBRERÍA' : item.section === 'beats' ? 'BEAT' : 'SAMPLE LOOP';
 
-  // 3. Generación dinámica del mensaje para WhatsApp con toda la información técnica
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const productUrl = `${origin}/#${item.section || 'catalog'}`;
+  // Detección dinámica y exacta del formato real del archivo (evita mostrar WAV si es MP3)
+  const resolvedFormat = (item.audioUrl && item.audioUrl.toLowerCase().endsWith('.mp3')) || (item.format && item.format.toLowerCase().includes('mp3'))
+    ? 'MP3 320kbps'
+    : (item.audioUrl && (item.audioUrl.toLowerCase().endsWith('.aiff') || item.audioUrl.toLowerCase().endsWith('.aif'))) || (item.format && item.format.toLowerCase().includes('aiff'))
+    ? 'AIFF 24-bit'
+    : (item.audioUrl && item.audioUrl.toLowerCase().endsWith('.zip')) || (item.format && item.format.toLowerCase().includes('zip'))
+    ? 'ZIP Archive'
+    : item.format || 'WAV 24-bit';
 
-  const messageLines: string[] = [
-    'Hola, quiero comprar este producto de ANOMALY SOUND.',
-    '',
-    `Producto: ${item.title}`,
-    `Categoría: ${item.category}`,
-    `Precio: $${itemPrice.toFixed(2)} USD`,
-    `Archivo: ${item.title.replace(/\s+/g, '_')}`,
-    `Formato: ${item.format}${item.fileSize ? ` (${item.fileSize})` : ''}`
-  ];
+  // Mensaje para WhatsApp estrictamente según el formato solicitado
+  const priceDisplay = Number(itemPrice) > 0 ? (Number(itemPrice) % 1 === 0 ? itemPrice.toString() : itemPrice.toFixed(2)) : '0';
+  const categoryText = item.category ? item.category.trim() : '';
+  const tempoLine = item.bpm ? `Tempo del Sample: ${item.bpm} BPM` : 'Tempo del Sample';
+  const keyLine = item.key && item.key.trim() ? `Key: ${item.key.trim()}` : 'Key';
 
-  const technicalDetails: string[] = [];
-  if (item.bpm) technicalDetails.push(`${item.bpm} BPM`);
-  if (item.key) technicalDetails.push(`Key ${item.key}`);
-  if (item.duration) technicalDetails.push(`${item.duration}s`);
-  if (technicalDetails.length > 0) {
-    messageLines.push(`Detalles técnicos: ${technicalDetails.join(' · ')}`);
-  }
-
-  if (item.description && item.description.trim()) {
-    messageLines.push(`Información: ${item.description.trim()}`);
-  }
-
-  messageLines.push(`ID del producto: ${item.id}`);
-  messageLines.push(`Enlace: ${productUrl}`);
-  messageLines.push('');
-  messageLines.push('Quisiera información para realizar el pago y recibir el archivo.');
-
-  const fullMessage = messageLines.join('\n');
+  const fullMessage = `Hola, quiero comprar este producto de ANOMALY SOUND. Producto: ${item.title} Categoría: ${categoryText} Precio: ${priceDisplay} USD\n${tempoLine}\n${keyLine}`;
 
   // Limpiar caracteres del número telefónico para la URL
   const cleanNumber = whatsappNumber.replace(/[^0-9]/g, '');
@@ -166,7 +150,7 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
               {item.title}
             </h3>
             <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 mt-0.5">
-              <span>{item.format}</span>
+              <span>{resolvedFormat}</span>
               {item.bpm && <span>· {item.bpm} BPM</span>}
               {item.key && <span>· Key {item.key}</span>}
             </div>
@@ -188,7 +172,7 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
           </div>
           <div className="flex justify-between">
             <span>Master Audio Original</span>
-            <span className="text-zinc-200">{item.format} ({item.fileSize})</span>
+            <span className="text-zinc-200">{resolvedFormat} ({item.fileSize || 'Original'})</span>
           </div>
           <div className="flex justify-between">
             <span>Coordinación de pago y entrega</span>

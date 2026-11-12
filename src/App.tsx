@@ -19,6 +19,7 @@ import {
   stopCurrentAudio,
   synthesizeItemAudio,
   getAudioBufferForItem,
+  audioBufferToWavBlob,
   setMasterVolume
 } from './utils/audioEngine';
 
@@ -204,15 +205,60 @@ export default function App() {
     }
   }
 
-  // Descarga auténtica del archivo master original sin conversiones ni recompresión
-  function triggerDownloadWav(item: SoundItem) {
-    const downloadUrl = `/api/download/free/${encodeURIComponent(item.id)}`;
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.setAttribute('download', '');
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  // Descarga auténtica del archivo master original sin conversiones ni corrupción a .html
+  async function triggerDownloadWav(item: SoundItem) {
+    try {
+      const downloadUrl = `/api/download/free/${encodeURIComponent(item.id)}`;
+      const response = await fetch(downloadUrl);
+
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('text/html') && !contentType.includes('application/json')) {
+          const blob = await response.blob();
+          const ext = (item.audioUrl && item.audioUrl.toLowerCase().endsWith('.mp3')) || (item.format && item.format.toLowerCase().includes('mp3'))
+            ? '.mp3'
+            : (item.audioUrl && (item.audioUrl.toLowerCase().endsWith('.aiff') || item.audioUrl.toLowerCase().endsWith('.aif'))) || (item.format && item.format.toLowerCase().includes('aiff'))
+            ? '.aiff'
+            : (item.audioUrl && item.audioUrl.toLowerCase().endsWith('.zip')) || (item.format && item.format.toLowerCase().includes('zip'))
+            ? '.zip'
+            : '.wav';
+
+          let filename = `${item.title.replace(/[^a-zA-Z0-9_-]/g, '_')}${ext}`;
+          const disposition = response.headers.get('content-disposition');
+          if (disposition && disposition.includes('filename=')) {
+            const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+            if (matches != null && matches[1]) {
+              filename = matches[1].replace(/['"]/g, '');
+            }
+          }
+
+          const blobUrl = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(blobUrl);
+          document.body.removeChild(a);
+          return;
+        }
+      }
+
+      // Si el archivo en disco no está accesible o es sintético, generar WAV de alta fidelidad sin crear archivo .html
+      const buffer = await getAudioBufferForItem(item);
+      const wavBlob = audioBufferToWavBlob(buffer);
+      const blobUrl = window.URL.createObjectURL(wavBlob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `${item.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(blobUrl);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Error durante la descarga:', err);
+      window.location.href = `/api/download/free/${encodeURIComponent(item.id)}`;
+    }
   }
 
   function openDownloadSheet(item: SoundItem) {
@@ -370,7 +416,7 @@ export default function App() {
             aria-label="Explorar catálogo"
           >
             <img src="/src/assets/images/hero_sound_sculpture_1793944360196.jpg" alt="" />
-            <span className="header-cta-label">Muestras WAV</span>
+            <span className="header-cta-label">Librerías WAV</span>
           </button>
         </div>
       </header>

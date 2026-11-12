@@ -16,12 +16,14 @@ import {
   Image as ImageIcon,
   FileAudio,
   Plus,
-  X
+  X,
+  RefreshCw
 } from 'lucide-react';
 import { CatalogSection, SoundItem } from '../types/sound';
 import {
   deleteAudioBlob,
   getAdminSession,
+  getAdminToken,
   getStorageUsage,
   getStoredCatalogItems,
   loginAdminApi,
@@ -30,6 +32,8 @@ import {
   saveAudioBlob,
   deleteItemApi,
   clearDemoItemsApi,
+  clearSectionApi,
+  replaceItemFileApi,
   saveItemApi,
   togglePublishApi,
   updateItemApi,
@@ -79,6 +83,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   // Estado de edición
   const [editingItem, setEditingItem] = useState<SoundItem | null>(null);
 
+  // Estados de reemplazo atómico de archivos (master o cover)
+  const [itemToReplace, setItemToReplace] = useState<SoundItem | null>(null);
+  const [replaceKind, setReplaceKind] = useState<'audio' | 'cover'>('audio');
+  const [replacementFile, setReplacementFile] = useState<File | null>(null);
+  const [replacementPreview, setReplacementPreview] = useState<string>('');
+  const [isReplacing, setIsReplacing] = useState<boolean>(false);
+
   // Estados de eliminación definitiva (confirmación sin window.confirm)
   const [itemToDelete, setItemToDelete] = useState<SoundItem | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
@@ -117,9 +128,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     });
   }, [isAdmin]);
 
-  // Actualizar categorías por defecto al cambiar de sección
+  // Actualizar configuración al cambiar de sección (categoría no obligatoria)
   useEffect(() => {
-    setCategory(suggestedCategories[activeSection][0]);
+    setCategory('');
     if (activeSection === 'one_shots') {
       setSyntheticType('808');
       setFormat('WAV 24-bit');
@@ -273,9 +284,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       const newItemData: Partial<SoundItem> = {
         section: activeSection,
         title: title.trim().toUpperCase(),
-        category: category || suggestedCategories[activeSection][0],
-        bpm: activeSection === 'one_shots' ? undefined : bpm,
-        key: keySignature,
+        category: category ? category.trim() : '',
+        bpm: activeSection === 'one_shots' ? undefined : (bpm || undefined),
+        key: keySignature ? keySignature.trim() : '',
         duration: durationSeconds,
         format,
         fileSize: fileSizeStr,
@@ -289,18 +300,20 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         description: description.trim()
       };
 
-      const res = await saveItemApi(newItemData);
+      const token = getAdminToken();
+      const res = await saveItemApi(newItemData, token || undefined);
 
       if (res.success && res.item) {
         // Refrescar lista de items
-        const fresh = await fetchAdminCatalogApi();
+        const fresh = await fetchAdminCatalogApi(token || undefined);
         setItems(fresh);
         onCatalogUpdated();
 
+        const sectionDisplay = activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase();
         setStatusFeedback({
           type: 'success',
           message: shouldPublishImmediately
-            ? `Archivo publicado con éxito en el catálogo de ${activeSection.replace('_', ' ').toUpperCase()}.`
+            ? `Archivo publicado con éxito en el catálogo de ${sectionDisplay}.`
             : `Archivo guardado como BORRADOR (no visible públicamente).`
         });
 
@@ -313,12 +326,54 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         setShowUploadForm(false);
         getStorageUsage().then(setStorageUsage);
       } else {
-        setStatusFeedback({ type: 'error', message: res.error || 'Error al guardar el sonido.' });
+        setStatusFeedback({ type: 'error', message: res.error || 'Error al guardar el sonido. Verifica tu sesión de administrador.' });
       }
     } catch (err: any) {
       setStatusFeedback({ type: 'error', message: err.message || 'Error durante la subida.' });
     } finally {
       setIsProcessing(false);
+      setTimeout(() => setStatusFeedback(null), 4000);
+    }
+  }
+
+  // Confirmar reemplazo atómico de audio master o carátula
+  async function handleConfirmReplace(e: React.FormEvent) {
+    e.preventDefault();
+    if (!itemToReplace || !replacementFile) {
+      setStatusFeedback({ type: 'error', message: 'Por favor selecciona un archivo para el reemplazo.' });
+      return;
+    }
+
+    setIsReplacing(true);
+    setStatusFeedback(null);
+
+    try {
+      const token = getAdminToken();
+      const res = await replaceItemFileApi(itemToReplace.id, replacementFile, replaceKind, token || undefined);
+      if (res.success && res.item) {
+        const fresh = await fetchAdminCatalogApi(token || undefined);
+        setItems(fresh);
+        onCatalogUpdated();
+        setStatusFeedback({
+          type: 'success',
+          message: `${replaceKind === 'audio' ? 'Audio master' : 'Carátula'} de "${itemToReplace.title}" reemplazado con éxito.`
+        });
+        setItemToReplace(null);
+        setReplacementFile(null);
+        setReplacementPreview('');
+      } else {
+        setStatusFeedback({
+          type: 'error',
+          message: res.error || 'Error al reemplazar el archivo.'
+        });
+      }
+    } catch (err: any) {
+      setStatusFeedback({
+        type: 'error',
+        message: err.message || 'Error en la solicitud de reemplazo.'
+      });
+    } finally {
+      setIsReplacing(false);
       setTimeout(() => setStatusFeedback(null), 4000);
     }
   }
@@ -433,16 +488,18 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     setIsDeleting(true);
 
     try {
-      await clearDemoItemsApi(activeSection);
+      const token = getAdminToken();
+      await clearSectionApi(activeSection, token || undefined);
 
-      const fresh = await fetchAdminCatalogApi();
+      const fresh = await fetchAdminCatalogApi(token || undefined);
       setItems(fresh);
       onCatalogUpdated();
       getStorageUsage().then(setStorageUsage);
 
+      const sectionDisplay = activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase();
       setStatusFeedback({
         type: 'success',
-        message: `Todos los archivos de ${activeSection.replace('_', ' ').toUpperCase()} han sido eliminados permanentemente.`
+        message: `Todos los archivos de ${sectionDisplay} han sido eliminados permanentemente.`
       });
       setShowClearSectionModal(false);
     } catch (err: any) {
@@ -604,12 +661,12 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             </p>
           </div>
 
-          {/* Selector de los 3 apartados: ONE SHOTS, BEATS, SAMPLES */}
+          {/* Selector de los 3 apartados: LIBRERÍAS, BEATS, SAMPLES */}
           <div className="inline-flex p-1 rounded-xl bg-white/[0.04] border border-white/10">
             {(['one_shots', 'beats', 'samples'] as CatalogSection[]).map((sec) => {
               const isActive = activeSection === sec;
               const count = items.filter((it) => it.section === sec).length;
-              const label = sec === 'one_shots' ? 'ONE SHOTS' : sec === 'beats' ? 'BEATS' : 'SAMPLES';
+              const label = sec === 'one_shots' ? 'LIBRERÍAS' : sec === 'beats' ? 'BEATS' : 'SAMPLES';
 
               return (
                 <button
@@ -640,7 +697,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             <div>
               <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 block">Apartado Activo</span>
               <span className="text-lg font-black font-display text-white uppercase">
-                {activeSection.replace('_', ' ')}
+                {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'}
               </span>
             </div>
             <div className="h-8 w-px bg-white/10" />
@@ -661,7 +718,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               <button
                 onClick={() => setShowClearSectionModal(true)}
                 className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-red-950/20 hover:bg-red-950/40 border border-red-500/20 text-red-300 hover:text-red-200 text-xs font-mono transition-colors"
-                title={`Eliminar permanentemente todos los elementos de ${activeSection.replace('_', ' ').toUpperCase()}`}
+                title={`Eliminar permanentemente todos los elementos de ${activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Vaciar Categoría</span>
@@ -680,7 +737,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               ) : (
                 <>
                   <Plus className="w-4 h-4" />
-                  <span>Subir a {activeSection.replace('_', ' ').toUpperCase()}</span>
+                  <span>Subir a {activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}</span>
                 </>
               )}
             </button>
@@ -693,7 +750,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
               <div>
                 <h3 className="text-lg font-black font-display uppercase tracking-wide text-white">
-                  Subir nuevo archivo a {activeSection.replace('_', ' ')}
+                  Subir nuevo archivo a {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'}
                 </h3>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   Archivos de audio originales WAV o MP3 sin recompresión y portada opcional.
@@ -787,16 +844,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-mono uppercase text-zinc-400">Categoría / Etiqueta</label>
-                  <select
+                  <label className="block text-xs font-mono uppercase text-zinc-400">Categoría / Género (Opcional)</label>
+                  <input
+                    type="text"
+                    placeholder="Ej. 808 Bass, Drum Kit (Opcional)"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/40 text-xs font-mono"
-                  >
-                    {suggestedCategories[activeSection].map((cat) => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
+                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-zinc-600 focus:outline-none focus:border-white/40 text-xs font-mono"
+                  />
                 </div>
               </div>
 
@@ -910,7 +965,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         <div className="rounded-2xl bg-zinc-950/40 backdrop-blur-xl border border-white/[0.08] overflow-hidden shadow-2xl">
           <div className="px-6 py-4 border-b border-white/[0.08] flex items-center justify-between">
             <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-white">
-              Archivos en {activeSection.replace('_', ' ')} ({sectionItems.length})
+              Archivos en {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'} ({sectionItems.length})
             </h2>
             <span className="text-[11px] font-mono text-zinc-500">
               Usa el conmutador de cada elemento para publicar o despublicar al instante.
@@ -1025,9 +1080,23 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
 
+                      {/* Botón Reemplazar Archivo Master o Carátula */}
+                      <button
+                        onClick={() => {
+                          setItemToReplace(item);
+                          setReplaceKind('audio');
+                          setReplacementFile(null);
+                          setReplacementPreview('');
+                        }}
+                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
+                        title="Reemplazar archivo master o carátula"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+
                       {/* Botón Descarga directa */}
                       <a
-                        href={item.audioUrl || `/api/download/${item.id}`}
+                        href={`/api/admin/download/item/${item.id}?admin_token=${encodeURIComponent(getAdminToken() || '')}`}
                         download={`${item.title}_ANOMALY_SOUND.wav`}
                         className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
                         title="Descargar archivo original"
@@ -1102,17 +1171,37 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </div>
               </div>
 
-              {editingItem.section !== 'one_shots' && (
+              <div className="grid grid-cols-2 gap-3">
+                {editingItem.section !== 'one_shots' ? (
+                  <div>
+                    <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Tempo (BPM)</label>
+                    <input
+                      type="number"
+                      value={editingItem.bpm || 140}
+                      onChange={(e) => setEditingItem({ ...editingItem, bpm: Number(e.target.value) })}
+                      className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Sección</label>
+                    <div className="px-3 py-2 rounded-xl bg-white/[0.02] border border-white/5 text-zinc-400 font-mono text-xs">
+                      Librerías (One-Shots)
+                    </div>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Tempo (BPM)</label>
+                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Formato de Entrega</label>
                   <input
-                    type="number"
-                    value={editingItem.bpm || 140}
-                    onChange={(e) => setEditingItem({ ...editingItem, bpm: Number(e.target.value) })}
+                    type="text"
+                    value={editingItem.format || 'MP3 320kbps'}
+                    onChange={(e) => setEditingItem({ ...editingItem, format: e.target.value })}
+                    placeholder="Ej. MP3 320kbps, WAV 24-bit"
                     className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
                   />
                 </div>
-              )}
+              </div>
 
               <div>
                 <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Descripción</label>
@@ -1122,6 +1211,64 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white text-xs focus:outline-none focus:border-white/40"
                 />
+              </div>
+
+              {/* Ajuste de Precio y Descarga Gratuita */}
+              <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.08] space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-zinc-200">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(editingItem.isFree)}
+                      onChange={(e) => {
+                        const isNowFree = e.target.checked;
+                        setEditingItem({
+                          ...editingItem,
+                          isFree: isNowFree,
+                          price: isNowFree ? 0 : (editingItem.price && editingItem.price > 0 ? editingItem.price : 19.99)
+                        });
+                      }}
+                      className="rounded accent-emerald-400"
+                    />
+                    <span>Descarga Gratuita (0% Regalías / Gratis)</span>
+                  </label>
+
+                  {editingItem.isFree && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                      Gratis
+                    </span>
+                  )}
+                </div>
+
+                {!editingItem.isFree && (
+                  <div className="flex items-center gap-3 pt-1">
+                    <label className="text-xs font-mono uppercase text-zinc-400 shrink-0">
+                      Precio USD ($):
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={editingItem.price ?? 19.99}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setEditingItem({
+                          ...editingItem,
+                          price: isNaN(val) ? 0 : val
+                        });
+                      }}
+                      className="w-28 px-3 py-1.5 rounded-xl bg-white/[0.05] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                      placeholder="19.99"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem({ ...editingItem, isFree: true, price: 0 })}
+                      className="text-[11px] font-mono text-zinc-400 hover:text-white underline underline-offset-2 ml-auto"
+                    >
+                      Poner gratis
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-between pt-2">
@@ -1151,6 +1298,138 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     Guardar Cambios
                   </button>
                 </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE REEMPLAZO ATÓMICO DE ARCHIVO (MASTER O PORTADA) */}
+      {itemToReplace && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-lg p-6 rounded-2xl bg-[#09090b] border border-white/20 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
+                  Reemplazar Archivo · {itemToReplace.title}
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setItemToReplace(null);
+                  setReplacementFile(null);
+                  setReplacementPreview('');
+                }}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-400">
+              Reemplaza el master de audio o la carátula preservando el ID, precio, metadatos y enlaces del producto sin romper referencias.
+            </p>
+
+            <form onSubmit={handleConfirmReplace} className="space-y-4">
+              <div className="flex items-center gap-3 p-1 rounded-xl bg-white/[0.04] border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplaceKind('audio');
+                    setReplacementFile(null);
+                    setReplacementPreview('');
+                  }}
+                  className={`flex-1 py-2 text-xs font-mono uppercase font-bold rounded-lg transition-all ${
+                    replaceKind === 'audio' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Audio Master (WAV, AIFF, MP3, ZIP)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplaceKind('cover');
+                    setReplacementFile(null);
+                    setReplacementPreview('');
+                  }}
+                  className={`flex-1 py-2 text-xs font-mono uppercase font-bold rounded-lg transition-all ${
+                    replaceKind === 'cover' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Carátula (PNG, JPG, WEBP)
+                </button>
+              </div>
+
+              {/* Selector de archivo */}
+              <label className="flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-white/20 hover:border-white/50 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-pointer group text-center">
+                {replaceKind === 'audio' ? (
+                  <FileAudio className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
+                ) : (
+                  <ImageIcon className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
+                )}
+
+                {replacementFile ? (
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-white block truncate max-w-xs">{replacementFile.name}</span>
+                    <span className="text-[11px] font-mono text-emerald-400">
+                      {(replacementFile.size / (1024 * 1024)).toFixed(2)} MB · Seleccionado
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <span className="text-xs font-semibold text-zinc-300">
+                      Selecciona el nuevo archivo {replaceKind === 'audio' ? 'de audio' : 'de imagen'}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 font-mono mt-1">
+                      {replaceKind === 'audio' ? 'Formatos: WAV, AIFF, MP3, ZIP' : 'Formatos: PNG, JPG, WEBP'}
+                    </span>
+                  </>
+                )}
+                <input
+                  type="file"
+                  accept={replaceKind === 'audio' ? 'audio/*,.wav,.aiff,.aif,.mp3,.zip' : 'image/*,.png,.jpg,.jpeg,.webp'}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setReplacementFile(f);
+                      if (replaceKind === 'cover') {
+                        setReplacementPreview(URL.createObjectURL(f));
+                      }
+                    }
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              {replaceKind === 'cover' && replacementPreview && (
+                <div className="flex items-center gap-3 p-2 rounded-xl bg-white/[0.03] border border-white/10">
+                  <img src={replacementPreview} alt="Preview" className="w-12 h-12 rounded-lg object-cover" />
+                  <span className="text-xs font-mono text-zinc-300 truncate">Vista previa de la nueva portada</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+                <button
+                  type="button"
+                  disabled={isReplacing}
+                  onClick={() => {
+                    setItemToReplace(null);
+                    setReplacementFile(null);
+                    setReplacementPreview('');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-mono text-zinc-400 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isReplacing || !replacementFile}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold font-mono uppercase tracking-wider transition-all disabled:opacity-40 flex items-center gap-2"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isReplacing ? 'animate-spin' : ''}`} />
+                  <span>{isReplacing ? 'Reemplazando...' : 'Confirmar Reemplazo'}</span>
+                </button>
               </div>
             </form>
           </div>
@@ -1226,7 +1505,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
             <div className="space-y-2">
               <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
-                Vaciar {activeSection.replace('_', ' ').toUpperCase()}
+                Vaciar {activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}
               </h3>
               <p className="text-sm text-zinc-300 font-medium leading-relaxed">
                 ¿Estás seguro de que deseas eliminar permanentemente todos los archivos de esta sección? Esta acción no se puede deshacer.

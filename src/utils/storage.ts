@@ -19,7 +19,7 @@ const LEADS_STORAGE_KEY = 'anomaly_leads';
 // Admin Session Management
 export function getAdminSession(): boolean {
   try {
-    return sessionStorage.getItem(ADMIN_SESSION_KEY) === 'true';
+    return sessionStorage.getItem(ADMIN_SESSION_KEY) === 'true' || localStorage.getItem(ADMIN_SESSION_KEY) === 'true';
   } catch {
     return false;
   }
@@ -29,8 +29,10 @@ export function setAdminSession(active: boolean) {
   try {
     if (active) {
       sessionStorage.setItem(ADMIN_SESSION_KEY, 'true');
+      localStorage.setItem(ADMIN_SESSION_KEY, 'true');
     } else {
       sessionStorage.removeItem(ADMIN_SESSION_KEY);
+      localStorage.removeItem(ADMIN_SESSION_KEY);
     }
   } catch {
     // Ignore
@@ -331,6 +333,7 @@ export function setAdminToken(token: string | null): void {
   try {
     if (token) {
       sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+      localStorage.setItem(ADMIN_TOKEN_KEY, token);
     } else {
       sessionStorage.removeItem(ADMIN_TOKEN_KEY);
       localStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -557,76 +560,118 @@ export async function updateItemApi(id: string, patch: Partial<SoundItem>, token
 }
 
 export async function togglePublishApi(id: string, isPublished: boolean, token?: string): Promise<boolean> {
-  try {
-    const effectiveToken = token || getAdminToken();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+  const effectiveToken = token || getAdminToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
 
-    const res = await fetch(`/api/admin/items/${id}/publish`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers,
-      body: JSON.stringify({ isPublished })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      togglePublishCatalogItem(id);
-      return data.isPublished;
-    }
-  } catch (err) {
-    console.warn('Error toggling publication on server, toggling locally:', err);
+  const res = await fetch(`/api/admin/items/${id}/publish`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ isPublished })
+  });
+  if (res.ok) {
+    const data = await res.json();
+    togglePublishCatalogItem(id);
+    return data.isPublished;
   }
-  const result = togglePublishCatalogItem(id);
-  return result ? result.isPublished : isPublished;
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || `Error al cambiar estado de publicación (${res.status})`);
 }
 
 export async function deleteItemApi(id: string, token?: string): Promise<boolean> {
-  try {
-    const effectiveToken = token || getAdminToken();
-    const headers: Record<string, string> = {};
-    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+  const effectiveToken = token || getAdminToken();
+  const headers: Record<string, string> = {};
+  if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
 
-    const res = await fetch(`/api/admin/items/${id}`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers
-    });
-    if (res.ok) {
-      deleteCatalogItem(id);
-      return true;
-    }
-  } catch (err) {
-    console.warn('Error deleting from server, deleting locally:', err);
+  const res = await fetch(`/api/admin/items/${id}`, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers
+  });
+  if (res.ok) {
+    deleteCatalogItem(id);
+    return true;
   }
-  deleteCatalogItem(id);
-  return true;
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || `Error al eliminar el archivo del servidor (${res.status})`);
+}
+
+export async function clearSectionApi(section: string, token?: string): Promise<boolean> {
+  const effectiveToken = token || getAdminToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+
+  const res = await fetch('/api/admin/clear-section', {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ section })
+  });
+  if (res.ok) {
+    const current = getStoredCatalogItems();
+    const updated = section === 'all' ? [] : current.filter((it) => it.section !== section);
+    saveStoredCatalogItems(updated);
+    return true;
+  }
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || `Error al vaciar sección (${res.status})`);
 }
 
 export async function clearDemoItemsApi(section: string, token?: string): Promise<boolean> {
+  return clearSectionApi(section, token);
+}
+
+export async function replaceItemFileApi(
+  id: string,
+  file: File,
+  kind: 'audio' | 'cover',
+  token?: string
+): Promise<{ success: boolean; item?: SoundItem; error?: string }> {
   try {
     const effectiveToken = token || getAdminToken();
+    const uploadRes = await uploadFileApi(file, kind, effectiveToken || undefined);
+    if (!uploadRes.success) {
+      return { success: false, error: uploadRes.error || 'Error al subir el nuevo archivo para reemplazo.' };
+    }
+
+    let format: string | undefined = undefined;
+    let fileSize: string | undefined = undefined;
+
+    if (kind === 'audio') {
+      const ext = file.name.split('.').pop()?.toUpperCase() || 'WAV';
+      if (ext === 'WAV') format = 'WAV 24-bit';
+      else if (ext === 'MP3') format = 'MP3 320kbps';
+      else if (ext === 'AIFF' || ext === 'AIF') format = 'AIFF 24-bit';
+      else if (ext === 'ZIP') format = 'ZIP Archive';
+      fileSize = `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
 
-    const res = await fetch('/api/admin/clear-demo-items', {
+    const res = await fetch(`/api/admin/items/${id}/replace-file`, {
       method: 'POST',
       credentials: 'include',
       headers,
-      body: JSON.stringify({ section })
+      body: JSON.stringify({
+        kind,
+        storagePath: uploadRes.storagePath,
+        url: uploadRes.url,
+        format,
+        fileSize
+      })
     });
-    if (res.ok) {
-      const current = getStoredCatalogItems();
-      const updated = section === 'all' ? [] : current.filter((it) => it.section !== section);
-      saveStoredCatalogItems(updated);
-      return true;
+
+    const data = await res.json();
+    if (res.ok && data.success && data.item) {
+      updateCatalogItem(data.item);
+      return { success: true, item: data.item };
     }
-  } catch (err) {
-    console.warn('Error clearing items on server, clearing locally:', err);
+    return { success: false, error: data.error || 'Error al reemplazar archivo en el servidor.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error durante el reemplazo del archivo.' };
   }
-  const current = getStoredCatalogItems();
-  const updated = section === 'all' ? [] : current.filter((it) => it.section !== section);
-  saveStoredCatalogItems(updated);
-  return true;
 }
 
 export async function uploadFileApi(
