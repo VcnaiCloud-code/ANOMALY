@@ -25,7 +25,10 @@ import {
 export const DEMO_ITEM_IDS = new Set([
   'os-01', 'os-02', 'os-03', 'os-04',
   'beat-01', 'beat-02', 'beat-03',
-  'smp-01', 'smp-02', 'smp-03'
+  'smp-01', 'smp-02', 'smp-03',
+  'item-hyper-808', 'item-analog-drift',
+  'item-dark-matter', 'item-neo-dembow',
+  'item-cyber-vocal', 'item-synth-vault'
 ]);
 
 export function isDemoItem(item: { id: string }): boolean {
