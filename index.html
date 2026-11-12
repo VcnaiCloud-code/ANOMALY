@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#000000" />
+    <script>
+      // Compatibility shim for browser extensions monkey-patching window networking APIs
+      (function() {
+        const props = ['WebSocket', 'fetch', 'XMLHttpRequest', 'EventSource'];
+        for (const prop of props) {
+          try {
+            let currentVal = window[prop];
+            Object.defineProperty(window, prop, {
+              get: function() { return currentVal; },
+              set: function(val) { currentVal = val; },
+              configurable: true,
+              enumerable: true
+            });
+          } catch (_) {}
+        }
+      })();
+    </script>
     <title>KOOPER SOUND — Samples & Sound Kits</title>
     <meta name="description" content="Plataforma premium y futurista de samples, drum kits, loops y paquetes de sonido para productores musicales." />
     <meta property="og:title" content="KOOPER SOUND — Samples & Sound Kits" />

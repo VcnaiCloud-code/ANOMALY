@@ -35,6 +35,9 @@ import {
   verifyAndConsumeDownloadTokenInSupabase,
   checkSupabaseHealth,
   checkFileExistsInStorage,
+  deleteFileFromStorage,
+  getSiteSettingFromSupabase,
+  setSiteSettingInSupabase,
   isSessionRevokedInSupabase,
   revokeSessionInSupabase,
   checkLoginRateLimitInSupabase,
@@ -62,6 +65,7 @@ const AUDIO_UPLOADS_DIR = path.join(UPLOADS_DIR, 'audio');
 const COVERS_UPLOADS_DIR = path.join(UPLOADS_DIR, 'covers');
 const CATALOG_DB_PATH = path.join(DATA_DIR, 'catalog_db.json');
 const ORDERS_DB_PATH = path.join(DATA_DIR, 'orders_db.json');
+const SITE_CONFIG_PATH = path.join(DATA_DIR, 'site_config.json');
 
 // Ensure storage directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -365,6 +369,72 @@ function writeLocalDatabase(items: SoundItemDb[]) {
   }
 }
 
+export interface SiteConfig {
+  heroImageUrl?: string;
+  heroImageStoragePath?: string;
+  updatedAt?: string;
+}
+
+function readLocalSiteConfig(): SiteConfig {
+  try {
+    if (!fs.existsSync(SITE_CONFIG_PATH)) {
+      const initial: SiteConfig = {
+        heroImageUrl: '',
+        heroImageStoragePath: '',
+        updatedAt: new Date().toISOString()
+      };
+      fs.writeFileSync(SITE_CONFIG_PATH, JSON.stringify(initial, null, 2), 'utf-8');
+      return initial;
+    }
+    const raw = fs.readFileSync(SITE_CONFIG_PATH, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    console.error('Error reading site config:', err);
+    return {};
+  }
+}
+
+function writeLocalSiteConfig(config: SiteConfig): boolean {
+  try {
+    fs.writeFileSync(SITE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('Error saving site config:', err);
+    return false;
+  }
+}
+
+async function getEffectiveSiteConfig(): Promise<SiteConfig> {
+  let config = readLocalSiteConfig();
+  if (isSupabaseConfigured()) {
+    try {
+      const remoteVal = await getSiteSettingFromSupabase('hero_image_config');
+      if (remoteVal) {
+        const parsed = JSON.parse(remoteVal);
+        if (parsed && typeof parsed === 'object') {
+          config = { ...config, ...parsed };
+        }
+      }
+    } catch {
+      // Fallback a config local
+    }
+  }
+  return config;
+}
+
+async function saveEffectiveSiteConfig(config: SiteConfig): Promise<boolean> {
+  writeLocalSiteConfig(config);
+  if (isSupabaseConfigured()) {
+    try {
+      await setSiteSettingInSupabase('hero_image_config', JSON.stringify(config));
+    } catch (err) {
+      console.warn('Aviso al persistir hero_image_config en Supabase:', err);
+    }
+  }
+  return true;
+}
+
 async function startServer() {
   const app = express();
 
@@ -637,7 +707,7 @@ async function startServer() {
           const supabaseUrl = getSanitizedSupabaseUrl();
           const publicUrl = kind === 'cover'
             ? `${supabaseUrl}/storage/v1/object/public/anomaly-covers/${storagePath}`
-            : undefined;
+            : `/api/audio/stream/${safeName}`;
 
           return res.json({
             success: true,
@@ -879,9 +949,111 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Serve uploaded files statically
-  app.use('/uploads/audio', express.static(AUDIO_UPLOADS_DIR));
+  // Serve uploaded files statically with authentic audio MIME types and range requests
+  app.use('/uploads/audio', express.static(AUDIO_UPLOADS_DIR, {
+    setHeaders: (res, filePath) => {
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.wav') res.setHeader('Content-Type', 'audio/wav');
+      else if (ext === '.mp3') res.setHeader('Content-Type', 'audio/mpeg');
+      else if (ext === '.aiff' || ext === '.aif') res.setHeader('Content-Type', 'audio/aiff');
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+  }));
   app.use('/uploads/covers', express.static(COVERS_UPLOADS_DIR));
+
+  // Explicit 404 for missing upload files to prevent SPA index.html fallback!
+  app.use('/uploads', (_req: Request, res: Response) => {
+    res.status(404).type('text/plain').send('Archivo de subida no encontrado en el servidor.');
+  });
+
+  // --- ENDPOINT DEDICADO DE STREAMING Y REPRODUCCIÓN DE AUDIO AUTÉNTICO ---
+  // Obtiene y reproduce exactamente el archivo de audio subido (Supabase Storage o local)
+  // STRICT: Cero audios predeterminados, cero sonido sintético, devuelve error real si no existe
+  app.get('/api/audio/stream/:id', async (req: Request, res: Response) => {
+    try {
+      const rawId = req.params.id;
+      if (!rawId) {
+        return res.status(400).json({ error: 'ID de audio requerido.' });
+      }
+
+      // 1. Buscar en catálogo Supabase o local
+      let item: any = null;
+      if (isSupabaseConfigured()) {
+        try {
+          item = await getSoundItemByIdFromSupabase(rawId);
+        } catch {}
+      }
+      if (!item) {
+        const localItems = readLocalDatabase();
+        item = localItems.find((it) => it.id === rawId || it.audioUrl?.includes(rawId) || it.audioStoragePath?.includes(rawId));
+      }
+
+      // 2. Si se localizó el producto en la base de datos:
+      if (item) {
+        const storagePath = item.audio_storage_path || item.audioStoragePath;
+        const audioUrl = item.audio_url || item.audioUrl;
+
+        // A) Almacenado en Supabase Storage privado
+        if (storagePath && isSupabaseConfigured()) {
+          const signedUrl = await createSignedAudioUrl(storagePath, 3600);
+          if (signedUrl) {
+            return res.redirect(signedUrl);
+          }
+        }
+
+        // B) URL externa completa (http/https)
+        if (audioUrl && (audioUrl.startsWith('http://') || audioUrl.startsWith('https://'))) {
+          return res.redirect(audioUrl);
+        }
+
+        // C) Archivo local en disco
+        const candidateName = audioUrl ? path.basename(audioUrl) : (storagePath ? path.basename(storagePath) : '');
+        if (candidateName) {
+          const fullLocalPath = path.join(AUDIO_UPLOADS_DIR, candidateName);
+          if (fs.existsSync(fullLocalPath) && fs.statSync(fullLocalPath).isFile()) {
+            const ext = path.extname(fullLocalPath).toLowerCase();
+            const contentType = ext === '.mp3' ? 'audio/mpeg'
+              : (ext === '.aiff' || ext === '.aif') ? 'audio/aiff'
+              : ext === '.wav' ? 'audio/wav'
+              : 'application/octet-stream';
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Accept-Ranges', 'bytes');
+            return res.sendFile(fullLocalPath);
+          }
+        }
+      }
+
+      // 3. Si rawId no es un ID de item, comprobar si es directamente un path/filename en Supabase Storage:
+      if (isSupabaseConfigured()) {
+        const potentialSupabasePath = rawId.startsWith('masters/') ? rawId : `masters/${path.basename(rawId)}`;
+        const signedUrl = await createSignedAudioUrl(potentialSupabasePath, 3600);
+        if (signedUrl) {
+          return res.redirect(signedUrl);
+        }
+      }
+
+      // 4. Comprobar si rawId es directamente un archivo físico local en AUDIO_UPLOADS_DIR:
+      const directLocalPath = path.join(AUDIO_UPLOADS_DIR, path.basename(rawId));
+      if (fs.existsSync(directLocalPath) && fs.statSync(directLocalPath).isFile()) {
+        const ext = path.extname(directLocalPath).toLowerCase();
+        const contentType = ext === '.mp3' ? 'audio/mpeg'
+          : (ext === '.aiff' || ext === '.aif') ? 'audio/aiff'
+          : ext === '.wav' ? 'audio/wav'
+          : 'application/octet-stream';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Accept-Ranges', 'bytes');
+        return res.sendFile(directLocalPath);
+      }
+
+      return res.status(404).json({
+        error: 'El archivo de audio auténtico no existe en el almacenamiento ni en el servidor.',
+        requestedId: rawId
+      });
+    } catch (err: any) {
+      console.error('Error en /api/audio/stream:', err);
+      return res.status(500).json({ error: 'Error al transmitir audio.', details: err.message });
+    }
+  });
 
   // --- ADMIN AUTH ROUTES ---
   // POST /api/admin/login with Rate Limiting protection against brute-force attacks
@@ -1385,7 +1557,11 @@ async function startServer() {
           return res.status(404).json({ error: 'Sonido no encontrado en Supabase.' });
         }
 
-        const patch: any = { id };
+        const patch: any = {
+          ...existing,
+          id,
+          updated_at: new Date().toISOString()
+        };
         if (kind === 'audio') {
           const oldStoragePath = existing.audio_storage_path;
           patch.audio_storage_path = storagePath || null;
@@ -1572,12 +1748,168 @@ async function startServer() {
     }
   });
 
-  // --- 1. PUBLIC CONFIGURATION (WhatsApp & Commerce Settings) ---
-  app.get('/api/config', (req: Request, res: Response) => {
-    res.json({
-      whatsappNumber: WHATSAPP_NUMBER,
-      currency: 'USD'
-    });
+  // --- 1. PUBLIC CONFIGURATION (WhatsApp, Commerce & Personalización del Sitio) ---
+  app.get('/api/config', async (req: Request, res: Response) => {
+    try {
+      const siteConfig = await getEffectiveSiteConfig();
+      res.json({
+        whatsappNumber: WHATSAPP_NUMBER,
+        currency: 'USD',
+        heroImageUrl: siteConfig.heroImageUrl || null
+      });
+    } catch {
+      res.json({
+        whatsappNumber: WHATSAPP_NUMBER,
+        currency: 'USD',
+        heroImageUrl: null
+      });
+    }
+  });
+
+  // --- 1.1 ADMIN: PERSONALIZACIÓN DEL SITIO (IMAGEN DEL HERO) ---
+  app.get('/api/admin/hero-image', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      const siteConfig = await getEffectiveSiteConfig();
+      return res.json({
+        success: true,
+        heroImageUrl: siteConfig.heroImageUrl || null,
+        storagePath: siteConfig.heroImageStoragePath || null,
+        updatedAt: siteConfig.updatedAt || null
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Error al consultar la imagen del HERO.', details: err.message });
+    }
+  });
+
+  app.post('/api/admin/hero-image', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      const { url, storagePath } = req.body;
+
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        return res.status(400).json({ error: 'La URL o ruta de la nueva imagen es obligatoria.' });
+      }
+
+      const cleanUrl = url.trim();
+      const cleanStoragePath = storagePath && typeof storagePath === 'string' ? storagePath.trim() : '';
+
+      // 1. Comprobar que la imagen se almacenó correctamente antes de reemplazar
+      let isVerified = false;
+
+      if (cleanStoragePath && isSupabaseConfigured()) {
+        const existsInSupabase = await checkFileExistsInStorage('anomaly-covers', cleanStoragePath);
+        if (existsInSupabase) {
+          isVerified = true;
+        }
+      }
+
+      if (!isVerified && cleanUrl.startsWith('/uploads/covers/')) {
+        const localFileName = path.basename(cleanUrl);
+        const localFilePath = path.join(COVERS_UPLOADS_DIR, localFileName);
+        if (fs.existsSync(localFilePath) && fs.statSync(localFilePath).size > 0) {
+          isVerified = true;
+        }
+      }
+
+      if (!isVerified && (cleanUrl.startsWith('http://') || cleanUrl.startsWith('https://'))) {
+        isVerified = true;
+      }
+
+      if (!isVerified) {
+        return res.status(400).json({
+          error: 'Fallo de verificación de seguridad: No se pudo verificar la existencia de la imagen en el almacenamiento. La imagen anterior se conservó.'
+        });
+      }
+
+      // 2. Obtener la referencia de la imagen anterior para reemplazo seguro
+      const previousConfig = await getEffectiveSiteConfig();
+      const previousStoragePath = previousConfig.heroImageStoragePath;
+      const previousUrl = previousConfig.heroImageUrl;
+
+      // 3. Actualizar y persistir la nueva referencia del HERO
+      const updatedConfig: SiteConfig = {
+        heroImageUrl: cleanUrl,
+        heroImageStoragePath: cleanStoragePath || '',
+        updatedAt: new Date().toISOString()
+      };
+
+      const saved = await saveEffectiveSiteConfig(updatedConfig);
+      if (!saved) {
+        return res.status(500).json({
+          error: 'Error al persistir la nueva configuración del HERO. Se conserva la imagen anterior.'
+        });
+      }
+
+      // 4. Confirmar que la configuración ahora utiliza la nueva imagen
+      const verifiedConfig = await getEffectiveSiteConfig();
+      if (verifiedConfig.heroImageUrl !== cleanUrl) {
+        return res.status(500).json({
+          error: 'Error de consistencia al verificar la nueva imagen del HERO.'
+        });
+      }
+
+      // 5. Eliminar la imagen anterior ÚNICAMENTE tras confirmar el nuevo uso
+      if (previousStoragePath && previousStoragePath !== cleanStoragePath) {
+        if (isSupabaseConfigured()) {
+          await deleteFileFromStorage('anomaly-covers', previousStoragePath);
+        }
+        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousStoragePath));
+        if (fs.existsSync(oldLocal)) {
+          try { fs.unlinkSync(oldLocal); } catch {}
+        }
+      } else if (previousUrl && previousUrl !== cleanUrl && previousUrl.startsWith('/uploads/covers/')) {
+        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousUrl));
+        if (fs.existsSync(oldLocal)) {
+          try { fs.unlinkSync(oldLocal); } catch {}
+        }
+      }
+
+      return res.json({
+        success: true,
+        heroImageUrl: cleanUrl,
+        storagePath: cleanStoragePath,
+        message: 'Imagen del HERO actualizada y confirmada con éxito en el sistema.'
+      });
+    } catch (err: any) {
+      console.error('Error al actualizar imagen del HERO:', err);
+      return res.status(500).json({ error: 'Error interno al actualizar imagen del HERO.', details: err.message });
+    }
+  });
+
+  app.post('/api/admin/hero-image/reset', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      const previousConfig = await getEffectiveSiteConfig();
+      const updatedConfig: SiteConfig = {
+        heroImageUrl: '',
+        heroImageStoragePath: '',
+        updatedAt: new Date().toISOString()
+      };
+
+      await saveEffectiveSiteConfig(updatedConfig);
+
+      // Limpiar archivo personalizado anterior si existía
+      if (previousConfig.heroImageStoragePath) {
+        if (isSupabaseConfigured()) {
+          await deleteFileFromStorage('anomaly-covers', previousConfig.heroImageStoragePath);
+        }
+        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousConfig.heroImageStoragePath));
+        if (fs.existsSync(oldLocal)) {
+          try { fs.unlinkSync(oldLocal); } catch {}
+        }
+      } else if (previousConfig.heroImageUrl && previousConfig.heroImageUrl.startsWith('/uploads/covers/')) {
+        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousConfig.heroImageUrl));
+        if (fs.existsSync(oldLocal)) {
+          try { fs.unlinkSync(oldLocal); } catch {}
+        }
+      }
+
+      return res.json({
+        success: true,
+        heroImageUrl: null,
+        message: 'Imagen del HERO restablecida al diseño original con éxito.'
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Error al restablecer imagen del HERO.', details: err.message });
+    }
   });
 
   // --- 2. AUTHENTIC MASTER DOWNLOAD FOR FREE ITEMS ---

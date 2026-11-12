@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Lock,
   UploadCloud,
@@ -17,7 +17,9 @@ import {
   FileAudio,
   Plus,
   X,
-  RefreshCw
+  RefreshCw,
+  Palette,
+  Sparkles
 } from 'lucide-react';
 import { CatalogSection, SoundItem } from '../types/sound';
 import {
@@ -38,18 +40,23 @@ import {
   togglePublishApi,
   updateItemApi,
   uploadFileApi,
-  fetchAdminCatalogApi
+  fetchAdminCatalogApi,
+  fetchHeroImageApi,
+  updateHeroImageApi,
+  resetHeroImageApi
 } from '../utils/storage';
-import { getAudioContext, playBuffer, stopCurrentAudio, getAudioBufferForItem } from '../utils/audioEngine';
+import { getAudioContext, playBuffer, stopCurrentAudio, getAudioBufferForItem, decodeAudio } from '../utils/audioEngine';
 
 interface AdminRouteProps {
   onBackToApp: () => void;
   onCatalogUpdated: () => void;
+  onHeroImageUpdated?: (newUrl: string) => void;
 }
 
 export const AdminRoute: React.FC<AdminRouteProps> = ({
   onBackToApp,
-  onCatalogUpdated
+  onCatalogUpdated,
+  onHeroImageUpdated
 }) => {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => getAdminSession());
   const [adminPassword, setAdminPassword] = useState('');
@@ -57,8 +64,24 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   const [loginError, setLoginError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  // Vista principal del panel: Catálogo (ONE SHOTS, BEATS, SAMPLES) o PERSONALIZACIÓN DEL SITIO
+  const [currentView, setCurrentView] = useState<'catalog' | 'site_customization'>('catalog');
+
   // 3 Apartados del Panel de Administración requeridos: ONE SHOTS, BEATS, SAMPLES
   const [activeSection, setActiveSection] = useState<CatalogSection>('one_shots');
+
+  // Estados para PERSONALIZACIÓN DEL SITIO (IMAGEN DEL HERO)
+  const DEFAULT_HERO_IMAGE = '/src/assets/images/hero_sound_sculpture_1793944360196.jpg';
+  const [currentHeroImage, setCurrentHeroImage] = useState<string>(DEFAULT_HERO_IMAGE);
+  const [heroStoragePath, setHeroStoragePath] = useState<string | null>(null);
+  const [heroUpdatedAt, setHeroUpdatedAt] = useState<string | null>(null);
+  const [selectedHeroFile, setSelectedHeroFile] = useState<File | null>(null);
+  const [heroPreviewUrl, setHeroPreviewUrl] = useState<string>('');
+  const [isHeroModalOpen, setIsHeroModalOpen] = useState(false);
+  const [isUpdatingHero, setIsUpdatingHero] = useState(false);
+  const [heroUpdateError, setHeroUpdateError] = useState<string>('');
+  const [heroDimensions, setHeroDimensions] = useState<{ width: number; height: number } | null>(null);
+  const heroFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Catálogo completo (incluye publicados y borradores privados)
   const [items, setItems] = useState<SoundItem[]>(getStoredCatalogItems());
@@ -127,6 +150,134 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       }
     });
   }, [isAdmin]);
+
+  // Carga de la configuración del HERO (Personalización del Sitio)
+  useEffect(() => {
+    fetchHeroImageApi().then((data) => {
+      if (data.heroImageUrl) {
+        setCurrentHeroImage(data.heroImageUrl);
+      }
+      if (data.storagePath) {
+        setHeroStoragePath(data.storagePath);
+      }
+      if (data.updatedAt) {
+        setHeroUpdatedAt(data.updatedAt);
+      }
+    });
+  }, []);
+
+  // --- MÉTODOS DE PERSONALIZACIÓN DEL SITIO (IMAGEN DEL HERO) ---
+  function handleSelectHeroFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setHeroUpdateError('');
+
+    // Validar tipo permitido: JPG, JPEG, PNG, WEBP
+    const validExts = ['.jpg', '.jpeg', '.png', '.webp'];
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+
+    if (!validExts.includes(ext) && !validTypes.includes(file.type)) {
+      setHeroUpdateError(`Formato ${ext || file.type} no permitido. Selecciona una imagen JPG, JPEG, PNG o WEBP.`);
+      return;
+    }
+
+    // Validar tamaño máximo: 10 MB
+    const MAX_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      setHeroUpdateError(`El archivo pesa ${(file.size / (1024 * 1024)).toFixed(2)} MB. El límite máximo admitido es 10 MB.`);
+      return;
+    }
+
+    const preview = URL.createObjectURL(file);
+    setSelectedHeroFile(file);
+    setHeroPreviewUrl(preview);
+
+    const img = new Image();
+    img.onload = () => {
+      setHeroDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.src = preview;
+
+    setIsHeroModalOpen(true);
+    if (e.target) e.target.value = '';
+  }
+
+  function handleCancelHeroChange() {
+    setIsHeroModalOpen(false);
+    setSelectedHeroFile(null);
+    if (heroPreviewUrl) {
+      URL.revokeObjectURL(heroPreviewUrl);
+      setHeroPreviewUrl('');
+    }
+    setHeroUpdateError('');
+    setHeroDimensions(null);
+  }
+
+  async function confirmHeroImageChange() {
+    if (!selectedHeroFile) return;
+
+    setIsUpdatingHero(true);
+    setHeroUpdateError('');
+
+    try {
+      const res = await updateHeroImageApi(selectedHeroFile);
+      if (!res.success || !res.heroImageUrl) {
+        throw new Error(res.error || 'Error al procesar la subida de la imagen del HERO.');
+      }
+
+      setCurrentHeroImage(res.heroImageUrl);
+      setHeroUpdatedAt(new Date().toISOString());
+
+      if (onHeroImageUpdated) {
+        onHeroImageUpdated(res.heroImageUrl);
+      }
+
+      setStatusFeedback({
+        type: 'success',
+        message: '¡Imagen del HERO actualizada y confirmada con éxito!'
+      });
+
+      handleCancelHeroChange();
+    } catch (err: any) {
+      setHeroUpdateError(err.message || 'Error al cambiar la imagen. La imagen anterior se ha conservado intacta.');
+    } finally {
+      setIsUpdatingHero(false);
+      setTimeout(() => setStatusFeedback(null), 4000);
+    }
+  }
+
+  async function handleResetHeroImage() {
+    setIsUpdatingHero(true);
+    try {
+      const res = await resetHeroImageApi();
+      if (!res.success) {
+        throw new Error(res.error || 'Error al restablecer la imagen.');
+      }
+
+      setCurrentHeroImage(DEFAULT_HERO_IMAGE);
+      setHeroStoragePath(null);
+      setHeroUpdatedAt(null);
+
+      if (onHeroImageUpdated) {
+        onHeroImageUpdated(DEFAULT_HERO_IMAGE);
+      }
+
+      setStatusFeedback({
+        type: 'success',
+        message: 'Imagen del HERO restablecida al diseño original por defecto.'
+      });
+    } catch (err: any) {
+      setStatusFeedback({
+        type: 'error',
+        message: err.message || 'Error al restablecer imagen del HERO.'
+      });
+    } finally {
+      setIsUpdatingHero(false);
+      setTimeout(() => setStatusFeedback(null), 3500);
+    }
+  }
 
   // Actualizar configuración al cambiar de sección (categoría no obligatoria)
   useEffect(() => {
@@ -215,9 +366,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       const buffer = await getAudioBufferForItem(item);
       playBuffer(buffer, 0, 1.0, false, () => setPlayingId(null));
       setPlayingId(item.id);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Audio preview error:', err);
       setPlayingId(null);
+      setStatusFeedback({
+        type: 'error',
+        message: `Error al reproducir "${item.title}": ${err?.message || 'Archivo de audio no disponible.'}`
+      });
     }
   }
 
@@ -226,6 +381,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     e.preventDefault();
     if (!title.trim()) {
       setStatusFeedback({ type: 'error', message: 'El nombre del archivo es obligatorio.' });
+      return;
+    }
+
+    if (!selectedAudioFile) {
+      setStatusFeedback({ type: 'error', message: 'Debes seleccionar un archivo de audio real (WAV, AIFF o MP3).' });
       return;
     }
 
@@ -244,33 +404,29 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       );
 
       let durationSeconds = activeSection === 'one_shots' ? 0.8 : activeSection === 'beats' ? 5.0 : 4.0;
-      let fileSizeStr = activeSection === 'one_shots' ? '1.4 MB' : '45 MB';
+      let fileSizeStr = `${(selectedAudioFile.size / (1024 * 1024)).toFixed(1)} MB`;
 
-      // 1. Si se adjuntó un archivo de audio real
-      if (selectedAudioFile) {
-        fileSizeStr = `${(selectedAudioFile.size / (1024 * 1024)).toFixed(1)} MB`;
-
-        // Intentar leer duración real mediante Web Audio
-        try {
-          const arrBuf = await selectedAudioFile.arrayBuffer();
-          const ctx = getAudioContext();
-          const decoded = await ctx.decodeAudioData(arrBuf);
-          durationSeconds = Number(decoded.duration.toFixed(1));
-        } catch {
-          // Ignored
-        }
-
-        // Subir al servidor persistente
-        const uploadRes = await uploadFileApi(selectedAudioFile, 'audio');
-        if (uploadRes.success) {
-          if (uploadRes.url) finalAudioUrl = uploadRes.url;
-          if (uploadRes.storagePath) finalAudioStoragePath = uploadRes.storagePath;
-        }
-
-        // También persistir en IndexedDB local
-        const tempId = `temp_${Date.now()}`;
-        await saveAudioBlob(tempId, selectedAudioFile);
+      // Intentar leer duración real mediante decodificación del archivo auténtico
+      try {
+        const arrBuf = await selectedAudioFile.arrayBuffer();
+        const decoded = await decodeAudio(arrBuf);
+        durationSeconds = Number(decoded.duration.toFixed(1));
+      } catch {
+        // Ignored si falla lectura en cliente
       }
+
+      // Subir al servidor persistente
+      const uploadRes = await uploadFileApi(selectedAudioFile, 'audio');
+      if (!uploadRes.success || (!uploadRes.url && !uploadRes.storagePath)) {
+        throw new Error(uploadRes.error || 'Error al subir el archivo de audio al servidor.');
+      }
+
+      finalAudioUrl = uploadRes.url;
+      finalAudioStoragePath = uploadRes.storagePath;
+
+      // También persistir en IndexedDB local
+      const tempId = `temp_${Date.now()}`;
+      await saveAudioBlob(tempId, selectedAudioFile);
 
       // 2. Si se adjuntó una portada opcional
       if (selectedCoverFile) {
@@ -650,21 +806,23 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       )}
 
       <main className="max-w-6xl mx-auto px-4 md:px-8 pt-8 space-y-8">
-        {/* Encabezado y Navegación de los 3 Apartados */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/[0.08] pb-6">
+        {/* Encabezado y Navegación de Apartados */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/[0.08] pb-6">
           <div>
             <h1 className="text-2xl font-black font-display tracking-tight text-white uppercase">
-              Gestión de Contenido
+              {currentView === 'site_customization' ? 'Personalización del Sitio' : 'Gestión de Contenido'}
             </h1>
             <p className="text-xs text-zinc-400 mt-1">
-              Sube, edita, publica y despublica audios WAV y MP3 en los 3 apartados del catálogo.
+              {currentView === 'site_customization'
+                ? 'Administra la identidad visual del sitio y reemplaza la imagen de fondo del HERO de forma segura.'
+                : 'Sube, edita, publica y despublica audios WAV y MP3 en los 3 apartados del catálogo.'}
             </p>
           </div>
 
-          {/* Selector de los 3 apartados: LIBRERÍAS, BEATS, SAMPLES */}
-          <div className="inline-flex p-1 rounded-xl bg-white/[0.04] border border-white/10">
+          {/* Selector de apartados: LIBRERÍAS, BEATS, SAMPLES y PERSONALIZACIÓN DEL SITIO */}
+          <div className="inline-flex flex-wrap p-1 rounded-xl bg-white/[0.04] border border-white/10 gap-1">
             {(['one_shots', 'beats', 'samples'] as CatalogSection[]).map((sec) => {
-              const isActive = activeSection === sec;
+              const isActive = currentView === 'catalog' && activeSection === sec;
               const count = items.filter((it) => it.section === sec).length;
               const label = sec === 'one_shots' ? 'LIBRERÍAS' : sec === 'beats' ? 'BEATS' : 'SAMPLES';
 
@@ -672,10 +830,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 <button
                   key={sec}
                   onClick={() => {
+                    setCurrentView('catalog');
                     setActiveSection(sec);
                     setShowUploadForm(false);
                   }}
-                  className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+                  className={`px-3.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
                     isActive
                       ? 'bg-white text-black shadow-lg'
                       : 'text-zinc-400 hover:text-white hover:bg-white/[0.03]'
@@ -688,11 +847,208 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </button>
               );
             })}
+
+            {/* Apartado nuevo: PERSONALIZACIÓN DEL SITIO */}
+            <button
+              onClick={() => {
+                setCurrentView('site_customization');
+                setShowUploadForm(false);
+              }}
+              className={`px-3.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+                currentView === 'site_customization'
+                  ? 'bg-white text-black shadow-lg'
+                  : 'text-zinc-400 hover:text-white hover:bg-white/[0.03]'
+              }`}
+            >
+              <Palette className="w-3.5 h-3.5" />
+              <span>PERSONALIZACIÓN DEL SITIO</span>
+            </button>
           </div>
         </div>
 
-        {/* Resumen de la sección activa y botón de nueva subida */}
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-white/[0.02] border border-white/[0.06]">
+        {currentView === 'site_customization' ? (
+          /* ========================================================================= */
+          /* APARTADO: PERSONALIZACIÓN DEL SITIO (CAMBIAR IMAGEN DEL HERO)              */
+          /* ========================================================================= */
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Card Principal de Personalización del HERO */}
+            <div className="p-6 md:p-8 rounded-2xl bg-zinc-950/80 backdrop-blur-2xl border border-white/10 shadow-2xl space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-5">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="p-2 rounded-lg bg-white/5 border border-white/10 text-white">
+                      <ImageIcon className="w-4 h-4" />
+                    </span>
+                    <h2 className="text-lg font-black font-display tracking-wider text-white uppercase">
+                      IMAGEN DE FONDO DEL HERO
+                    </h2>
+                  </div>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Control exclusivo del administrador para reemplazar la imagen de fondo del HERO sin tocar código.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {currentHeroImage === DEFAULT_HERO_IMAGE ? (
+                    <span className="px-3 py-1 rounded-full bg-white/[0.06] border border-white/10 text-zinc-400 text-xs font-mono">
+                      Diseño Original (Escultura)
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs font-mono flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Imagen Personalizada Activa
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Vista previa en vivo con estética idéntica al Hero público */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs font-mono text-zinc-400">
+                  <span>Vista Previa del HERO Público</span>
+                  {heroUpdatedAt && (
+                    <span className="text-[11px] text-zinc-500">
+                      Última actualización: {new Date(heroUpdatedAt).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+
+                <div className="relative aspect-[16/7] md:aspect-[21/9] w-full rounded-2xl overflow-hidden border border-white/10 bg-black group shadow-2xl">
+                  {/* Imagen de fondo */}
+                  <img
+                    src={currentHeroImage}
+                    alt="Hero preview"
+                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02]"
+                  />
+                  {/* Gradiente y tratamiento visual idéntico al HERO público */}
+                  <div
+                    className="absolute inset-0 pointer-events-none"
+                    style={{
+                      background: 'radial-gradient(ellipse 60% 55% at 78% 40%, rgba(255,255,255,0.06), transparent 70%), linear-gradient(180deg, rgba(5,5,5,0.2) 0%, rgba(5,5,5,0.85) 100%)'
+                    }}
+                  />
+
+                  {/* Representación de los textos del Hero para verificar contraste */}
+                  <div className="absolute inset-0 p-6 md:p-8 flex flex-col justify-end pointer-events-none">
+                    <div className="max-w-md space-y-1">
+                      <span className="text-[10px] md:text-xs font-mono uppercase tracking-widest text-zinc-400 block">
+                        El sonido de
+                      </span>
+                      <h3 className="text-xl md:text-3xl font-black font-display tracking-tight text-white uppercase leading-none">
+                        ANOMALY <span className="text-zinc-400">SOUND</span>
+                      </h3>
+                      <p className="text-[11px] md:text-xs text-zinc-400 line-clamp-1 pt-1">
+                        Librerías WAV 24-bit · One Shots, Beats & Samples
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Controles de Acción y Botón Principal */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-white/[0.08]">
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* BOTÓN PRINCIPAL REQUERIDO: CAMBIAR IMAGEN DEL HERO */}
+                  <button
+                    type="button"
+                    onClick={() => heroFileInputRef.current?.click()}
+                    disabled={isUpdatingHero}
+                    className="px-6 py-3 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-black font-mono uppercase tracking-wider transition-all shadow-xl hover:scale-[1.01] active:scale-[0.98] flex items-center justify-center gap-2.5 disabled:opacity-50"
+                  >
+                    <UploadCloud className="w-4 h-4 text-black" />
+                    <span>CAMBIAR IMAGEN DEL HERO</span>
+                  </button>
+
+                  {/* Botón para restablecer al diseño original si está personalizada */}
+                  {currentHeroImage !== DEFAULT_HERO_IMAGE && (
+                    <button
+                      type="button"
+                      onClick={handleResetHeroImage}
+                      disabled={isUpdatingHero}
+                      className="px-4 py-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-300 hover:text-white text-xs font-mono transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                      title="Volver a la escultura sonora original de ANOMALY SOUND"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isUpdatingHero ? 'animate-spin' : ''}`} />
+                      <span>Restablecer imagen original</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-[11px] font-mono text-zinc-500">
+                  Formatos admitidos: JPG, PNG, WEBP · Máximo 10 MB
+                </div>
+              </div>
+
+              {/* Guía de seguridad y conservación */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span className="text-[11px] font-mono font-bold text-white uppercase block">
+                    1. Reemplazo Seguro
+                  </span>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    La imagen se transfiere y verifica en Supabase Storage antes de activarse. Si ocurre algún error, se conserva la actual.
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span className="text-[11px] font-mono font-bold text-white uppercase block">
+                    2. Persistencia Total
+                  </span>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    Almacenada en la base de datos y configuración del servidor. Persiste entre recargas, sesiones y dispositivos.
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span className="text-[11px] font-mono font-bold text-white uppercase block">
+                    3. Integridad del HERO
+                  </span>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    Cambia exclusivamente el fondo. Tipografía, títulos, botones y animaciones del HERO permanecen 100% intactos.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ========================================================================= */
+          /* VISTA DE CATÁLOGO (ONE SHOTS, BEATS, SAMPLES)                             */
+          /* ========================================================================= */
+          <div className="space-y-8">
+            {/* Banner de acceso rápido a PERSONALIZACIÓN DEL SITIO */}
+            <div className="p-3.5 px-4 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black">
+                  <img src={currentHeroImage} alt="" className="w-full h-full object-cover" />
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-white block">
+                    Personalización del Sitio · Imagen del HERO
+                  </span>
+                  <span className="text-[11px] font-mono text-zinc-400 block">
+                    {currentHeroImage === DEFAULT_HERO_IMAGE ? 'Diseño original activo' : 'Imagen personalizada activa'}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => heroFileInputRef.current?.click()}
+                  className="px-3.5 py-1.5 rounded-lg bg-white text-black hover:bg-zinc-200 text-xs font-mono font-bold uppercase transition-colors flex items-center gap-1.5"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>CAMBIAR IMAGEN DEL HERO</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('site_customization')}
+                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-mono text-zinc-300 hover:text-white transition-colors"
+                >
+                  Ver Apartado
+                </button>
+              </div>
+            </div>
+
+            {/* Resumen de la sección activa y botón de nueva subida */}
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-white/[0.02] border border-white/[0.06]">
           <div className="flex items-center gap-6">
             <div>
               <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 block">Apartado Activo</span>
@@ -1119,7 +1475,128 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             </div>
           )}
         </div>
-      </main>
+      </div>
+    )}
+  </main>
+
+  {/* INPUT OCULTO PARA SELECCIONAR IMAGEN DEL HERO */}
+  <input
+    ref={heroFileInputRef}
+    type="file"
+    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+    onChange={handleSelectHeroFile}
+    className="hidden"
+  />
+
+  {/* MODAL DE CONFIRMACIÓN PARA CAMBIAR IMAGEN DEL HERO */}
+  {isHeroModalOpen && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="w-full max-w-xl p-6 md:p-8 rounded-2xl bg-[#09090b] border border-white/15 shadow-2xl space-y-5 relative">
+        <div className="flex items-center justify-between border-b border-white/10 pb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2 rounded-lg bg-white/10 text-white">
+              <ImageIcon className="w-4 h-4" />
+            </span>
+            <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
+              Confirmar Cambio de Imagen del HERO
+            </h3>
+          </div>
+          <button
+            type="button"
+            disabled={isUpdatingHero}
+            onClick={handleCancelHeroChange}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Comparativa visual: Actual vs. Nueva */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 block">
+              Imagen Actual
+            </span>
+            <div className="aspect-[16/10] rounded-xl overflow-hidden border border-white/10 bg-black relative">
+              <img src={currentHeroImage} alt="Current hero" className="w-full h-full object-cover" />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 block flex items-center gap-1.5">
+              <CheckCircle2 className="w-3 h-3" />
+              Nueva Selección
+            </span>
+            <div className="aspect-[16/10] rounded-xl overflow-hidden border border-emerald-500/40 bg-black relative shadow-lg shadow-emerald-950/20">
+              <img src={heroPreviewUrl} alt="New hero preview" className="w-full h-full object-cover" />
+            </div>
+          </div>
+        </div>
+
+        {/* Ficha técnica del nuevo archivo */}
+        {selectedHeroFile && (
+          <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs font-mono space-y-1">
+            <div className="flex items-center justify-between text-zinc-300">
+              <span className="text-zinc-500">Archivo:</span>
+              <span className="font-bold text-white truncate max-w-[280px]">{selectedHeroFile.name}</span>
+            </div>
+            <div className="flex items-center justify-between text-zinc-300">
+              <span className="text-zinc-500">Peso:</span>
+              <span className="text-emerald-400 font-bold">{(selectedHeroFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+            </div>
+            {heroDimensions && (
+              <div className="flex items-center justify-between text-zinc-300">
+                <span className="text-zinc-500">Resolución:</span>
+                <span>{heroDimensions.width} × {heroDimensions.height} px</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Mensaje de error si falla */}
+        {heroUpdateError && (
+          <div className="p-3.5 rounded-xl bg-red-950/30 border border-red-500/30 text-xs text-red-200 flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>{heroUpdateError}</span>
+          </div>
+        )}
+
+        <p className="text-xs text-zinc-400 leading-relaxed">
+          Al confirmar, la imagen se subirá a Supabase Storage y se aplicará permanentemente al HERO público. La imagen anterior se conservará intacta hasta que el almacenamiento confirme la recepción.
+        </p>
+
+        <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
+          <button
+            type="button"
+            disabled={isUpdatingHero}
+            onClick={handleCancelHeroChange}
+            className="px-4 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 text-xs font-mono font-medium text-zinc-300 hover:text-white transition-colors"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            disabled={isUpdatingHero}
+            onClick={confirmHeroImageChange}
+            className="px-5 py-2.5 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-bold font-mono uppercase tracking-wider transition-all shadow-lg flex items-center gap-2 disabled:opacity-50"
+          >
+            {isUpdatingHero ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Subiendo a Supabase Storage...</span>
+              </>
+            ) : (
+              <>
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>Confirmar y Aplicar al HERO</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
 
       {/* MODAL DE EDICIÓN DE ELEMENTO */}
       {editingItem && (

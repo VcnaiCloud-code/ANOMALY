@@ -775,4 +775,129 @@ export async function uploadFileApi(
   }
 }
 
+// -------------------------------------------------------------------------------
+// PERSONALIZACIÓN DEL SITIO / HERO IMAGE API
+// -------------------------------------------------------------------------------
+
+export async function fetchHeroImageApi(): Promise<{ heroImageUrl: string | null; storagePath?: string | null; updatedAt?: string | null }> {
+  try {
+    const token = getAdminToken();
+    const res = await fetch('/api/admin/hero-image', {
+      credentials: 'include',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        heroImageUrl: data.heroImageUrl || null,
+        storagePath: data.storagePath || null,
+        updatedAt: data.updatedAt || null
+      };
+    }
+  } catch (err) {
+    console.warn('Error fetching hero image config:', err);
+  }
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    return { heroImageUrl: data.heroImageUrl || null };
+  } catch {
+    return { heroImageUrl: null };
+  }
+}
+
+export async function updateHeroImageApi(
+  file: File,
+  token?: string
+): Promise<{ success: boolean; heroImageUrl?: string; message?: string; error?: string }> {
+  try {
+    // 1. Subir primero la nueva imagen a Supabase Storage (o streaming local)
+    const uploadResult = await uploadFileApi(file, 'cover', token);
+    if (!uploadResult.success || !uploadResult.url) {
+      return {
+        success: false,
+        error: uploadResult.error || 'Error al subir la nueva imagen del HERO al almacenamiento.'
+      };
+    }
+
+    // 2. Confirmar y actualizar la referencia en el endpoint administrativo protegido
+    const effectiveToken = token || getAdminToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (effectiveToken) {
+      headers['Authorization'] = `Bearer ${effectiveToken}`;
+    }
+
+    const res = await fetch('/api/admin/hero-image', {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({
+        url: uploadResult.url,
+        storagePath: uploadResult.storagePath || ''
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || 'Error al confirmar la nueva imagen del HERO en el servidor.'
+      };
+    }
+
+    return {
+      success: true,
+      heroImageUrl: data.heroImageUrl,
+      message: data.message || 'Imagen del HERO actualizada y confirmada correctamente.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Error de conexión al actualizar la imagen del HERO.'
+    };
+  }
+}
+
+export async function resetHeroImageApi(
+  token?: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const effectiveToken = token || getAdminToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (effectiveToken) {
+      headers['Authorization'] = `Bearer ${effectiveToken}`;
+    }
+
+    const res = await fetch('/api/admin/hero-image/reset', {
+      method: 'POST',
+      credentials: 'include',
+      headers
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || 'Error al restablecer la imagen del HERO.'
+      };
+    }
+
+    return {
+      success: true,
+      message: data.message || 'Imagen del HERO restablecida al diseño original.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Error de conexión al restablecer imagen del HERO.'
+    };
+  }
+}
+
 

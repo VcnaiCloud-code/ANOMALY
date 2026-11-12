@@ -1042,3 +1042,49 @@ export async function clearLoginAttemptsInSupabase(ip: string): Promise<void> {
   }
 }
 
+// -------------------------------------------------------------------------------
+// SITE SETTINGS / PERSONALIZACIÓN DEL SITIO EN SUPABASE
+// -------------------------------------------------------------------------------
+
+export async function getSiteSettingFromSupabase(key: string): Promise<string | null> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('site_settings')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data.value as string;
+  } catch {
+    return null;
+  }
+}
+
+export async function setSiteSettingInSupabase(key: string, value: string): Promise<boolean> {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) return false;
+
+  try {
+    const { error } = await supabase
+      .from('site_settings')
+      .upsert({
+        key,
+        value,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'key' });
+
+    if (error) {
+      console.warn('Aviso al guardar configuración de sitio en Supabase:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Excepción al guardar configuración de sitio en Supabase:', err);
+    return false;
+  }
+}
+

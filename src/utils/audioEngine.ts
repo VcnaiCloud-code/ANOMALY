@@ -1,6 +1,7 @@
 /**
  * ANOMALY SOUND - Studio-Grade Web Audio Engine
- * Real-time synthesis, lossless WAV generation, and audio analysis.
+ * Real-time playback, lossless audio decoding (WAV, MP3, AIFF), and audio analysis.
+ * STRICT: Zero synthetic fallbacks or demo audio loops.
  */
 
 // Global AudioContext singleton (lazily initialized on first user interaction)
@@ -36,267 +37,169 @@ export function setMasterVolume(val: number) {
 }
 
 /**
- * Synthesize an authentic, high-impact Urban Dembow Drum Kit Demo Loop
+ * Reads an 80-bit IEEE 754 extended precision float (used in AIFF COMM chunk sampleRate).
  */
-export function synthesizeDembowLoop(kitType: 'inferno' | 'deluxe' = 'inferno'): AudioBuffer {
-  const ctx = getAudioContext();
-  const sampleRate = ctx.sampleRate;
-  const bpm = 96;
-  const beat = 60 / bpm; // ~0.625s
-  const duration = beat * 8; // 2 full bars = 5.0 seconds
-  const length = Math.floor(sampleRate * duration);
-  const buffer = ctx.createBuffer(2, length, sampleRate);
-  const left = buffer.getChannelData(0);
-  const right = buffer.getChannelData(1);
+function readFloat80(bytes: Uint8Array, offset: number): number {
+  const exp = ((bytes[offset] & 0x7f) << 8) | bytes[offset + 1];
+  const sign = (bytes[offset] & 0x80) ? -1 : 1;
+  if (exp === 0) return 0;
+  const hi = ((bytes[offset + 2] << 24) | (bytes[offset + 3] << 16) | (bytes[offset + 4] << 8) | bytes[offset + 5]) >>> 0;
+  const lo = ((bytes[offset + 6] << 24) | (bytes[offset + 7] << 16) | (bytes[offset + 8] << 8) | bytes[offset + 9]) >>> 0;
+  const mantissa = hi * 4294967296 + lo;
+  return sign * (mantissa / Math.pow(2, 63)) * Math.pow(2, exp - 16383);
+}
 
-  // Dembow hit times (in beats)
-  // Kicks on every beat: 0, 1, 2, 3, 4, 5, 6, 7
-  const kickBeats = [0, 1, 2, 3, 4, 5, 6, 7];
-  // Snares on syncopated dembow positions:
-  const snareBeats = [0.75, 1.5, 2.75, 3.5, 4.75, 5.5, 6.75, 7.5];
-  // Hi-hats/shakers on 8ths and 16ths:
-  const hatBeats = [0.25, 0.5, 0.75, 1.25, 1.5, 1.75, 2.25, 2.5, 2.75, 3.25, 3.5, 3.75,
-                    4.25, 4.5, 4.75, 5.25, 5.5, 5.75, 6.25, 6.5, 6.75, 7.25, 7.5, 7.75];
+/**
+ * Native in-browser AIFF/AIFC PCM parser for full Web Audio compatibility.
+ * Allows browsers like Chrome to decode genuine AIFF files without error.
+ */
+export function parseAiffToAudioBuffer(bytes: Uint8Array, ctx: AudioContext): AudioBuffer | null {
+  if (bytes.length < 54) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-  for (let i = 0; i < length; i++) {
-    const t = i / sampleRate;
-    let sL = 0;
-    let sR = 0;
+  let pos = 12; // Skip FORM header ("FORM" + 4 bytes size + "AIFF"/"AIFC")
+  let numChannels = 0;
+  let numSampleFrames = 0;
+  let sampleSize = 0; // bits per sample (16 or 24 or 8)
+  let sampleRate = 44100;
+  let soundDataOffset = -1;
+  let soundDataLength = 0;
 
-    // 1. Kicks
-    for (const kb of kickBeats) {
-      const kt = t - kb * beat;
-      if (kt >= 0 && kt < 0.45) {
-        const pEnv = Math.exp(-kt * 45);
-        const f = 52 + 220 * pEnv;
-        const bEnv = Math.exp(-kt * 8.5);
-        const click = (Math.random() * 2 - 1) * Math.exp(-kt * 120) * 0.35;
-        const kWave = Math.sin(2 * Math.PI * f * kt) + click;
-        sL += kWave * bEnv * 0.9;
-        sR += kWave * bEnv * 0.9;
+  while (pos + 8 <= bytes.length) {
+    const chunkId = String.fromCharCode(bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]);
+    const chunkSize = view.getUint32(pos + 4, false); // big-endian
+    const chunkDataPos = pos + 8;
+
+    if (chunkId === 'COMM') {
+      numChannels = view.getUint16(chunkDataPos, false);
+      numSampleFrames = view.getUint32(chunkDataPos + 2, false);
+      sampleSize = view.getUint16(chunkDataPos + 6, false);
+      sampleRate = readFloat80(bytes, chunkDataPos + 8);
+    } else if (chunkId === 'SSND') {
+      const ssndOffset = view.getUint32(chunkDataPos, false);
+      soundDataOffset = chunkDataPos + 8 + ssndOffset;
+      soundDataLength = chunkSize - 8 - ssndOffset;
+    }
+
+    // AIFF chunks are padded to even number of bytes
+    pos += 8 + chunkSize + (chunkSize % 2 === 1 ? 1 : 0);
+  }
+
+  if (numChannels <= 0 || numSampleFrames <= 0 || soundDataOffset < 0 || sampleRate <= 0) {
+    return null;
+  }
+
+  const clampedRate = Math.max(8000, Math.min(192000, Math.round(sampleRate)));
+  const buffer = ctx.createBuffer(numChannels, numSampleFrames, clampedRate);
+  const bytesPerSample = Math.floor(sampleSize / 8);
+  if (bytesPerSample !== 2 && bytesPerSample !== 3 && bytesPerSample !== 1) {
+    return null;
+  }
+
+  const bytesPerFrame = bytesPerSample * numChannels;
+  let readPos = soundDataOffset;
+
+  for (let frame = 0; frame < numSampleFrames; frame++) {
+    if (readPos + bytesPerFrame > bytes.length) break;
+    for (let ch = 0; ch < numChannels; ch++) {
+      let sampleFloat = 0;
+      if (bytesPerSample === 2) {
+        // 16-bit big-endian PCM
+        const s16 = ((bytes[readPos] << 24) | (bytes[readPos + 1] << 16)) >> 16;
+        sampleFloat = s16 / 32768.0;
+        readPos += 2;
+      } else if (bytesPerSample === 3) {
+        // 24-bit big-endian PCM
+        const s24 = ((bytes[readPos] << 24) | (bytes[readPos + 1] << 16) | (bytes[readPos + 2] << 8)) >> 8;
+        sampleFloat = s24 / 8388608.0;
+        readPos += 3;
+      } else if (bytesPerSample === 1) {
+        // 8-bit signed PCM
+        const s8 = (bytes[readPos] << 24) >> 24;
+        sampleFloat = s8 / 128.0;
+        readPos += 1;
       }
+      buffer.getChannelData(ch)[frame] = sampleFloat;
     }
-
-    // 2. Snares (punchy modern rim-snare with stereo spread)
-    for (const sb of snareBeats) {
-      const st = t - sb * beat;
-      if (st >= 0 && st < 0.55) {
-        const sFreq = 195 * Math.exp(-st * 20) + 140;
-        const sTone = Math.sin(2 * Math.PI * sFreq * st) * Math.exp(-st * 16) * 0.7;
-        const noise = (Math.random() * 2 - 1) * Math.exp(-st * 8);
-        sL += (sTone * 0.6 + noise * 0.65) * Math.exp(-st * 5);
-        sR += (sTone * 0.6 + noise * 0.62) * Math.exp(-st * 5);
-      }
-    }
-
-    // 3. Shaker / Hi-hat groove
-    for (const hb of hatBeats) {
-      const ht = t - hb * beat;
-      if (ht >= 0 && ht < 0.12) {
-        const hNoise = (Math.random() * 2 - 1) * Math.exp(-ht * 36);
-        const hMetal = Math.sin(2 * Math.PI * 7200 * ht) * 0.2;
-        sL += (hNoise + hMetal) * 0.22;
-        sR += (hNoise * 0.95 + hMetal) * 0.22;
-      }
-    }
-
-    // 4. Sub 808 bassline
-    const barProgress = (t % (beat * 4)) / (beat * 4);
-    const subFreq = barProgress < 0.5 ? 43.65 : 38.89; // F1 to Eb1
-    const subWave = Math.sin(2 * Math.PI * subFreq * t);
-    const subSat = Math.tanh(subWave * 1.8) * 0.45;
-    sL += subSat;
-    sR += subSat;
-
-    // 5. Deluxe additions: dark analog melody & vocal chop texture
-    if (kitType === 'deluxe') {
-      const melodyFreq = 349.23; // F4
-      const mWave = Math.sin(2 * Math.PI * melodyFreq * t) * (0.5 + 0.5 * Math.sin(2 * Math.PI * 1.5 * t));
-      const mEnv = 0.18;
-      sL += mWave * mEnv;
-      sR += mWave * mEnv * 0.9;
-    }
-
-    // Soft master limiting
-    left[i] = Math.tanh(sL * 0.85);
-    right[i] = Math.tanh(sR * 0.85);
   }
 
   return buffer;
 }
 
 /**
- * Universal synthesis helper for any SoundItem
+ * Decode an ArrayBuffer containing WAV, MP3, or AIFF audio into an AudioBuffer.
+ * STRICT: Does NOT synthesize audio. Throws if the audio data cannot be decoded.
  */
-export function synthesizeItemAudio(item: {
-  syntheticType?: string;
-  category?: string;
-  bpm?: number;
-  key?: string;
-}): AudioBuffer {
-  const type = item.syntheticType || 'synth';
-  if (type === 'beat_dembow' || type === 'beat_trap') {
-    return synthesizeDembowLoop(type === 'beat_trap' ? 'deluxe' : 'inferno');
+export async function decodeAudio(arrayBuf: ArrayBuffer): Promise<AudioBuffer> {
+  const ctx = getAudioContext();
+  const bytes = new Uint8Array(arrayBuf);
+
+  // Check if AIFF (starts with "FORM" and has "AIFF" or "AIFC" form type)
+  const isAiff = bytes.length >= 12 &&
+    bytes[0] === 0x46 && bytes[1] === 0x4F && bytes[2] === 0x52 && bytes[3] === 0x4D && // "FORM"
+    ((bytes[8] === 0x41 && bytes[9] === 0x49 && bytes[10] === 0x46 && bytes[11] === 0x46) || // "AIFF"
+     (bytes[8] === 0x41 && bytes[9] === 0x49 && bytes[10] === 0x46 && bytes[11] === 0x43)); // "AIFC"
+
+  if (isAiff) {
+    try {
+      const aiffBuffer = parseAiffToAudioBuffer(bytes, ctx);
+      if (aiffBuffer) return aiffBuffer;
+    } catch (aiffErr) {
+      console.warn('Custom AIFF decoder warning:', aiffErr);
+    }
   }
-  const validTypes = ['808', 'kick', 'snare', 'hihat', 'synth', 'vocal', 'riser'] as const;
-  const match = validTypes.find((t) => t === type) || 'synth';
-  return synthesizeSoundBuffer(match, item.bpm || 140, item.key || 'C Minor');
+
+  // Standard Web Audio decode (handles WAV, MP3, AAC, FLAC, OGG, and Safari AIFF)
+  try {
+    const copy = arrayBuf.slice(0);
+    return await ctx.decodeAudioData(copy);
+  } catch (err: any) {
+    if (isAiff) {
+      throw new Error('No se pudo decodificar el archivo AIFF. Verifica que contenga audio PCM no comprimido.');
+    }
+    throw new Error(`Error al decodificar audio: ${err?.message || 'formato de archivo no válido'}.`);
+  }
 }
 
 /**
- * Asynchronously loads an AudioBuffer for any SoundItem.
- * Fetches and decodes real uploaded audio (WAV, MP3) when audioUrl or blob is present,
- * otherwise falls back cleanly to synthesis.
+ * Loads and decodes an authentic AudioBuffer for any SoundItem.
+ * Connects directly to the uploaded file URL (WAV, MP3, AIFF).
+ * STRICT: Does NOT fall back to synthetic loops or demo audio.
+ * Throws a descriptive error if the real audio is missing or inaccessible.
  */
 export async function getAudioBufferForItem(item: {
+  id?: string;
   audioUrl?: string;
-  syntheticType?: string;
-  category?: string;
-  bpm?: number;
-  key?: string;
+  audioStoragePath?: string;
+  title?: string;
 }): Promise<AudioBuffer> {
-  const ctx = getAudioContext();
+  let targetUrl = item.audioUrl;
 
-  if (item.audioUrl) {
-    try {
-      const response = await fetch(item.audioUrl);
-      if (response.ok) {
-        const arrayBuf = await response.arrayBuffer();
-        return await ctx.decodeAudioData(arrayBuf);
-      }
-    } catch (err) {
-      console.warn('Error decoding uploaded audioUrl, falling back to synthesis:', err);
-    }
+  // If no direct audioUrl is set, resolve to the server audio stream endpoint
+  if (!targetUrl && item.id) {
+    targetUrl = `/api/audio/stream/${encodeURIComponent(item.id)}`;
   }
 
-  return synthesizeItemAudio(item);
-}
-
-/**
- * Generate a high quality studio synthetic sound buffer
- */
-export function synthesizeSoundBuffer(
-  type: '808' | 'kick' | 'snare' | 'hihat' | 'synth' | 'vocal' | 'riser',
-  bpm: number = 140,
-  key: string = 'C Minor'
-): AudioBuffer {
-  const ctx = getAudioContext();
-  const sampleRate = ctx.sampleRate;
-  
-  // Choose duration based on sound type
-  let duration = 2.0;
-  if (type === '808') duration = 3.2;
-  else if (type === 'kick') duration = 0.6;
-  else if (type === 'snare') duration = 0.7;
-  else if (type === 'hihat') duration = 0.35;
-  else if (type === 'synth') duration = 4.0;
-  else if (type === 'vocal') duration = 2.5;
-  else if (type === 'riser') duration = 4.5;
-
-  const length = Math.floor(sampleRate * duration);
-  const buffer = ctx.createBuffer(2, length, sampleRate);
-  const left = buffer.getChannelData(0);
-  const right = buffer.getChannelData(1);
-
-  // Frequency mapping for keys
-  const keyFrequencies: Record<string, number> = {
-    'C': 130.81, 'C#': 138.59, 'Db': 138.59, 'D': 146.83, 'D#': 155.56, 'Eb': 155.56,
-    'E': 164.81, 'F': 174.61, 'F#': 185.00, 'Gb': 185.00, 'G': 196.00, 'G#': 207.65,
-    'Ab': 207.65, 'A': 220.00, 'A#': 233.08, 'Bb': 233.08, 'B': 246.94
-  };
-  const rootNote = key.split(' ')[0] || 'C';
-  const baseFreq = keyFrequencies[rootNote] || 130.81;
-
-  for (let i = 0; i < length; i++) {
-    const t = i / sampleRate;
-    let sampleL = 0;
-    let sampleR = 0;
-
-    switch (type) {
-      case '808': {
-        // Deep sliding sub with subtle harmonic saturation
-        const pitchEnv = Math.exp(-t * 2.8);
-        const freq = (baseFreq * 0.5) * (0.8 + 1.4 * pitchEnv);
-        const ampEnv = Math.exp(-t * 0.95);
-        const fundamental = Math.sin(2 * Math.PI * freq * t);
-        // Soft clipping / tube drive
-        const driven = Math.tanh(fundamental * 2.2);
-        const sub = Math.sin(2 * Math.PI * (freq * 0.5) * t) * 0.4;
-        sampleL = (driven * 0.7 + sub) * ampEnv;
-        sampleR = sampleL;
-        break;
-      }
-      case 'kick': {
-        // Punchy click transient + fast pitch dive + body resonance
-        const pitchEnv = Math.exp(-t * 32);
-        const freq = 55 + 240 * pitchEnv;
-        const ampEnv = Math.exp(-t * 7);
-        const click = (Math.random() * 2 - 1) * Math.exp(-t * 80) * 0.4;
-        const body = Math.sin(2 * Math.PI * freq * t);
-        sampleL = (body + click) * ampEnv;
-        sampleR = sampleL;
-        break;
-      }
-      case 'snare': {
-        // Metallic tone + filtered noise tail
-        const toneFreq = 185 * Math.exp(-t * 15) + 120;
-        const tone = Math.sin(2 * Math.PI * toneFreq * t) * Math.exp(-t * 12) * 0.6;
-        const noise = (Math.random() * 2 - 1) * Math.exp(-t * 7.5);
-        sampleL = (tone + noise * 0.8) * Math.exp(-t * 4);
-        sampleR = (tone + noise * 0.78) * Math.exp(-t * 4);
-        break;
-      }
-      case 'hihat': {
-        // Crisp high metallic square mix with bandpass envelope
-        const noise = (Math.random() * 2 - 1);
-        const metallic = Math.sin(2 * Math.PI * 6500 * t) * 0.3 + Math.sin(2 * Math.PI * 8900 * t) * 0.3;
-        const env = Math.exp(-t * 26);
-        sampleL = (noise * 0.7 + metallic) * env * 0.8;
-        sampleR = (noise * 0.68 + metallic) * env * 0.8;
-        break;
-      }
-      case 'synth': {
-        // Detuned dual sawtooth analog pad with chorus filter sweep
-        const f0 = baseFreq * 2;
-        const cutoff = 800 + 1200 * (0.5 + 0.5 * Math.sin(2 * Math.PI * 0.5 * t));
-        const saw1 = ((2 * (t * f0 % 1)) - 1);
-        const saw2 = ((2 * (t * (f0 * 1.006) % 1)) - 1);
-        const sub = Math.sin(2 * Math.PI * (f0 * 0.5) * t) * 0.4;
-        const env = Math.min(1, t * 8) * Math.exp(-t * 0.28);
-        sampleL = (saw1 * 0.4 + sub * 0.3) * env;
-        sampleR = (saw2 * 0.4 + sub * 0.3) * env;
-        break;
-      }
-      case 'vocal': {
-        // Futuristic vocal chop formant resonance
-        const f0 = baseFreq * 1.5;
-        const formant1 = Math.sin(2 * Math.PI * 750 * t);
-        const formant2 = Math.sin(2 * Math.PI * 1800 * t) * 0.5;
-        const carrier = ((2 * (t * f0 % 1)) - 1);
-        const env = Math.min(1, t * 15) * Math.exp(-t * 0.8);
-        const mod = (carrier * (formant1 + formant2) * 0.5);
-        sampleL = mod * env;
-        sampleR = mod * env;
-        break;
-      }
-      case 'riser': {
-        // Exponential pitch riser with stereo flange
-        const progress = t / duration;
-        const freq = 120 * Math.pow(16, progress);
-        const wave = Math.sin(2 * Math.PI * freq * t);
-        const noise = (Math.random() * 2 - 1) * progress * 0.6;
-        const env = Math.pow(progress, 1.8);
-        sampleL = (wave * 0.6 + noise) * env;
-        sampleR = (Math.sin(2 * Math.PI * (freq * 1.01) * t) * 0.6 + noise) * env;
-        break;
-      }
-    }
-
-    left[i] = Math.max(-1, Math.min(1, sampleL));
-    right[i] = Math.max(-1, Math.min(1, sampleR));
+  if (!targetUrl) {
+    throw new Error(`El producto "${item.title || 'seleccionado'}" no tiene ningún archivo de audio asignado.`);
   }
 
-  return buffer;
+  const response = await fetch(targetUrl);
+  if (!response.ok) {
+    throw new Error(`No se pudo obtener el audio real (código HTTP ${response.status}). El archivo no existe o no se subió correctamente.`);
+  }
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('text/html') || contentType.includes('application/json')) {
+    throw new Error(`El servidor devolvió una respuesta de texto/HTML en lugar del archivo binario de audio.`);
+  }
+
+  const arrayBuf = await response.arrayBuffer();
+  if (arrayBuf.byteLength === 0) {
+    throw new Error(`El archivo de audio recibido está vacío (0 bytes).`);
+  }
+
+  return await decodeAudio(arrayBuf);
 }
 
 /**
@@ -306,7 +209,6 @@ export function synthesizeSoundBuffer(
 export function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   const numChannels = buffer.numberOfChannels;
   const sampleRate = buffer.sampleRate;
-  const format = 1; // PCM
   const bitDepth = 16;
   const bytesPerSample = bitDepth / 8;
   const blockAlign = numChannels * bytesPerSample;
@@ -327,8 +229,8 @@ export function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   writeString(view, 12, 'fmt ');
   // format chunk length
   view.setUint32(16, 16, true);
-  // sample format (raw)
-  view.setUint16(20, format, true);
+  // sample format (raw PCM)
+  view.setUint16(20, 1, true);
   // channel count
   view.setUint16(22, numChannels, true);
   // sample rate
@@ -348,11 +250,8 @@ export function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   let offset = 44;
   for (let i = 0; i < buffer.length; i++) {
     for (let channel = 0; channel < numChannels; channel++) {
-      let sample = buffer.getChannelData(channel)[i];
-      // Clamp sample to [-1, 1]
-      sample = Math.max(-1, Math.min(1, sample));
-      // Scale to 16-bit signed integer
-      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
       view.setInt16(offset, intSample, true);
       offset += 2;
     }
@@ -368,12 +267,12 @@ function writeString(view: DataView, offset: number, string: string) {
 }
 
 /**
- * Extract 48 normalized peaks from an AudioBuffer to draw sleek waveforms
+ * Extracts normalized peak waveform points from an AudioBuffer for visualizers
  */
 export function extractWaveformData(buffer: AudioBuffer, numPoints: number = 48): number[] {
   const channelData = buffer.getChannelData(0);
   const blockSize = Math.floor(channelData.length / numPoints);
-  const waveform: number[] = [];
+  const peaks: number[] = [];
 
   for (let i = 0; i < numPoints; i++) {
     const start = i * blockSize;
@@ -381,51 +280,41 @@ export function extractWaveformData(buffer: AudioBuffer, numPoints: number = 48)
     for (let j = 0; j < blockSize; j++) {
       sum += Math.abs(channelData[start + j] || 0);
     }
-    const avg = sum / blockSize;
-    // Map with a nice logarithmic feel and minimum bar height
-    const normalized = Math.min(1, Math.max(0.12, avg * 2.8));
-    waveform.push(Number(normalized.toFixed(2)));
+    const avg = sum / (blockSize || 1);
+    peaks.push(Math.min(1.0, Math.max(0.08, avg * 3.2)));
   }
 
-  return waveform;
+  return peaks;
 }
 
 /**
- * Generate synthetic realistic waveform data for mock/preloaded tracks
+ * Generates aesthetic waveform heights for UI displays
  */
 export function generateSyntheticWaveform(points: number = 48, seed: number = 1): number[] {
   const result: number[] = [];
   for (let i = 0; i < points; i++) {
-    const t = i / points;
-    const wave = Math.sin(t * Math.PI * 4 + seed) * 0.35 + 0.45;
-    const noise = Math.sin(i * 12.7 + seed * 3) * 0.2;
-    const envelope = Math.sin(t * Math.PI); // tapering edges
-    const val = Math.max(0.12, Math.min(0.98, (wave + noise) * envelope + 0.15));
+    const progress = i / points;
+    const env = Math.sin(progress * Math.PI);
+    const noise = (Math.sin(i * 1.7 + seed * 2.3) * 0.5 + 0.5);
+    const val = (0.2 + 0.7 * env * noise);
     result.push(Number(val.toFixed(2)));
   }
   return result;
 }
 
 /**
- * Play an AudioBuffer with callback triggers
+ * Plays an authentic AudioBuffer through the studio audio engine
  */
 export function playBuffer(
   buffer: AudioBuffer,
-  offset: number = 0,
+  offsetSeconds: number = 0,
   playbackRate: number = 1.0,
   loop: boolean = false,
   onEnded?: () => void
 ): { stop: () => void; getPlaybackTime: () => number } {
   const ctx = getAudioContext();
-  
-  if (currentSourceNode) {
-    try {
-      currentSourceNode.stop();
-      currentSourceNode.disconnect();
-    } catch {
-      // Ignored if already stopped
-    }
-  }
+
+  stopCurrentAudio();
 
   const source = ctx.createBufferSource();
   source.buffer = buffer;
@@ -438,22 +327,23 @@ export function playBuffer(
     source.connect(ctx.destination);
   }
 
-  const startTime = ctx.currentTime - offset;
-  source.start(0, offset);
+  const startTime = ctx.currentTime - offsetSeconds;
+  source.start(0, offsetSeconds);
   currentSourceNode = source;
 
   source.onended = () => {
     if (currentSourceNode === source) {
       currentSourceNode = null;
     }
-    onEnded?.();
+    if (onEnded) {
+      onEnded();
+    }
   };
 
   return {
     stop: () => {
       try {
         source.stop();
-        source.disconnect();
       } catch {
         // Ignored
       }
@@ -462,8 +352,9 @@ export function playBuffer(
       }
     },
     getPlaybackTime: () => {
-      if (!ctx) return 0;
-      return (ctx.currentTime - startTime) * playbackRate;
+      if (!source.buffer) return 0;
+      const elapsed = (ctx.currentTime - startTime) * playbackRate;
+      return loop ? elapsed % source.buffer.duration : Math.min(elapsed, source.buffer.duration);
     }
   };
 }
@@ -472,7 +363,6 @@ export function stopCurrentAudio() {
   if (currentSourceNode) {
     try {
       currentSourceNode.stop();
-      currentSourceNode.disconnect();
     } catch {
       // Ignored
     }

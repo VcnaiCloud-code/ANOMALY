@@ -106,8 +106,15 @@ CREATE TABLE IF NOT EXISTS public.admin_login_attempts (
 
 CREATE INDEX IF NOT EXISTS idx_login_attempts_blocked ON public.admin_login_attempts(blocked_until);
 
+-- 7. TABLA: CONFIGURACIÓN Y PERSONALIZACIÓN DEL SITIO (site_settings)
+CREATE TABLE IF NOT EXISTS public.site_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ==============================================================================
--- 7. ROW LEVEL SECURITY (RLS) - POLÍTICAS DE ACCESO
+-- 8. ROW LEVEL SECURITY (RLS) - POLÍTICAS DE ACCESO
 -- ==============================================================================
 
 ALTER TABLE public.sound_items ENABLE ROW LEVEL SECURITY;
@@ -116,6 +123,21 @@ ALTER TABLE public.download_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.download_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_revoked_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_login_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+
+-- Reglas para site_settings:
+DROP POLICY IF EXISTS "Public can view site settings" ON public.site_settings;
+CREATE POLICY "Public can view site settings"
+    ON public.site_settings
+    FOR SELECT
+    USING (true);
+
+DROP POLICY IF EXISTS "Service role full access on site settings" ON public.site_settings;
+CREATE POLICY "Service role full access on site settings"
+    ON public.site_settings
+    FOR ALL
+    USING (auth.jwt() ->> 'role' = 'service_role' OR current_user = 'postgres')
+    WITH CHECK (auth.jwt() ->> 'role' = 'service_role' OR current_user = 'postgres');
 
 -- Reglas para sound_items:
 DROP POLICY IF EXISTS "Public can view published sound items" ON public.sound_items;
