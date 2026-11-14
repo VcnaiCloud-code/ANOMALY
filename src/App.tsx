@@ -130,7 +130,7 @@ export default function App() {
   const activeControllerRef = useRef<FastPlaybackController | null>(null);
   const playRequestIdRef = useRef(0);
   const animFrameRef = useRef<number | null>(null);
-  const heroCtaRef = useRef<HTMLButtonElement | null>(null);
+  const heroCtaRef = useRef<HTMLAnchorElement | null>(null);
   const headerScrolledRef = useRef(false);
 
   // Motor de Smooth Scrolling adaptativo y listener ligero (sin reflows por frame)
@@ -582,18 +582,8 @@ export default function App() {
             </h1>
           </div>
           <div className="hero-actions">
-            <button
-              ref={heroCtaRef}
-              className="btn btn-dl"
-              id="heroCta"
-              onClick={() => scrollToAnchor('one-shots')}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
-              </svg>
-              Explorar catálogo
-            </button>
             <a
+              ref={heroCtaRef}
               href="#beats"
               onClick={(e) => {
                 e.preventDefault();
