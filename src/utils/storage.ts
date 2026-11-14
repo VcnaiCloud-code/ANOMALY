@@ -6,7 +6,6 @@
  */
 
 import { HeroFraming, Order, SoundCategory, SoundItem, SoundProduct, SoundTrack, StorageConfig, UserAccount } from '../types/sound';
-import { generateSyntheticWaveform } from './audioEngine';
 
 const DB_NAME = 'AnomalySoundDB';
 const DB_VERSION = 1;
@@ -673,6 +672,20 @@ export async function replaceItemFileApi(
   }
 }
 
+function resolveCanonicalMimeType(file: File, kind: 'audio' | 'cover'): string {
+  const name = file.name.toLowerCase();
+  if (kind === 'cover') {
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.webp')) return 'image/webp';
+    return 'image/jpeg';
+  }
+  if (name.endsWith('.mp3')) return 'audio/mpeg';
+  if (name.endsWith('.aiff') || name.endsWith('.aif')) return 'audio/aiff';
+  if (name.endsWith('.zip')) return 'application/zip';
+  if (name.endsWith('.wav')) return 'audio/wav';
+  return file.type || 'audio/wav';
+}
+
 export async function uploadFileApi(
   file: File,
   kind: 'audio' | 'cover',
@@ -700,6 +713,8 @@ export async function uploadFileApi(
     };
     if (effectiveToken) authHeaders['Authorization'] = `Bearer ${effectiveToken}`;
 
+    const canonicalMime = resolveCanonicalMimeType(file, kind);
+
     const authRes = await fetch('/api/admin/request-upload-signed-url', {
       method: 'POST',
       credentials: 'include',
@@ -707,7 +722,7 @@ export async function uploadFileApi(
       body: JSON.stringify({
         fileName: file.name,
         fileSize: file.size,
-        fileType: file.type,
+        fileType: canonicalMime,
         kind,
         magicBytesBase64
       })
@@ -719,34 +734,65 @@ export async function uploadFileApi(
     }
 
     // 3. MODO SUPABASE DIRECTO: Carga segura directa a Supabase Storage mediante URL firmada
-    // CERO consumo de RAM en Node.js (el navegador transmite el binario directo al bucket de Supabase)
     if (authData.mode === 'supabase_direct_signed_url' && authData.signedUrl) {
-      const uploadRes = await fetch(authData.signedUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': file.type || (kind === 'audio' ? 'audio/wav' : 'image/jpeg')
-        },
-        body: file
-      });
+      try {
+        const uploadRes = await fetch(authData.signedUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': canonicalMime
+          },
+          body: file
+        });
 
-      if (!uploadRes.ok) {
-        const upErr = await uploadRes.text().catch(() => '');
+        if (uploadRes.ok) {
+          return {
+            success: true,
+            url: authData.publicUrl || '',
+            storagePath: authData.storagePath
+          };
+        }
+      } catch {
+        // Fallback a proxy del servidor si el navegador bloquea PUT directo por CORS
+      }
+
+      // Fallback seguro vía /api/admin/upload-raw (sube a Supabase Storage desde Node.js con Service Role Key)
+      if (file.size <= 100 * 1024 * 1024) {
+        const rawHeaders: Record<string, string> = {
+          'Content-Type': canonicalMime,
+          'x-file-name': encodeURIComponent(file.name),
+          'x-file-kind': kind
+        };
+        if (effectiveToken) rawHeaders['Authorization'] = `Bearer ${effectiveToken}`;
+
+        const rawRes = await fetch('/api/admin/upload-raw', {
+          method: 'POST',
+          credentials: 'include',
+          headers: rawHeaders,
+          body: file
+        });
+        const rawData = await rawRes.json().catch(() => ({}));
+        if (rawRes.ok && rawData.success) {
+          return {
+            success: true,
+            url: rawData.url || (kind === 'audio' ? `/api/audio/stream/${encodeURIComponent(rawData.fileName || '')}` : ''),
+            storagePath: rawData.storagePath
+          };
+        }
         return {
           success: false,
-          error: `Error al transferir archivo a Supabase Storage: ${upErr || uploadRes.statusText}`
+          error: rawData.error || 'Error al transferir archivo a Supabase Storage.'
         };
       }
 
       return {
-        success: true,
-        url: authData.publicUrl || '',
-        storagePath: authData.storagePath
+        success: false,
+        error: 'Error al transferir archivo grande directamente a Supabase Storage.'
       };
     }
 
     // 4. MODO LOCAL STREAMING: Streaming directo a disco en entorno local sin buffering en RAM
     const streamHeaders: Record<string, string> = {
-      'Content-Type': file.type || (kind === 'audio' ? 'audio/wav' : 'image/jpeg'),
+      'Content-Type': canonicalMime,
       'x-file-name': encodeURIComponent(file.name),
       'x-file-kind': kind,
       'x-file-size': String(file.size)
@@ -956,6 +1002,56 @@ export async function resetHeroImageApi(
       success: false,
       error: err.message || 'Error de conexión al restablecer imagen del HERO.'
     };
+  }
+}
+
+export interface SupabaseHealthStatus {
+  configured: boolean;
+  connected: boolean;
+  tablesReady: boolean;
+  storageReady: boolean;
+  missingVars?: string[];
+  message: string;
+}
+
+export async function fetchSupabaseStatusApi(token?: string): Promise<SupabaseHealthStatus | null> {
+  try {
+    const effectiveToken = token || getAdminToken();
+    const headers: Record<string, string> = {};
+    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+
+    const res = await fetch('/api/admin/supabase-status', {
+      credentials: 'include',
+      headers
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function migrateToSupabaseApi(token?: string): Promise<{
+  success: boolean;
+  migratedCount?: number;
+  skippedCount?: number;
+  failedCount?: number;
+  errors?: string[];
+  error?: string;
+}> {
+  try {
+    const effectiveToken = token || getAdminToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (effectiveToken) headers['Authorization'] = `Bearer ${effectiveToken}`;
+
+    const res = await fetch('/api/admin/migrate-to-supabase', {
+      method: 'POST',
+      credentials: 'include',
+      headers
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error al sincronizar con Supabase.' };
   }
 }
 

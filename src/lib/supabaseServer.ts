@@ -7,9 +7,34 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import path from 'path';
 
+function stripQuotesAndWhitespace(val: string): string {
+  let cleaned = (val || '').trim();
+  while (
+    cleaned.length >= 2 &&
+    ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'")) ||
+      (cleaned.startsWith('`') && cleaned.endsWith('`')))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  return cleaned;
+}
+
 export function sanitizeSupabaseUrl(url: string): string {
   if (!url) return '';
-  let cleaned = url.trim();
+  let cleaned = stripQuotesAndWhitespace(url);
+  if (!cleaned) return '';
+
+  // Si se pegó accidentalmente la URL del Dashboard de Supabase (https://supabase.com/dashboard/project/<ref>)
+  const dashboardMatch = cleaned.match(/supabase\.com\/dashboard\/project\/([a-z0-9]+)/i);
+  if (dashboardMatch && dashboardMatch[1]) {
+    cleaned = `https://${dashboardMatch[1]}.supabase.co`;
+  }
+
+  if (!/^https?:\/\//i.test(cleaned) && /^[a-z0-9.-]+\.[a-z]{2,}/i.test(cleaned)) {
+    cleaned = `https://${cleaned}`;
+  }
+
   cleaned = cleaned.replace(/\/+$/, '');
   cleaned = cleaned.replace(/\/rest\/v1\/?$/, '');
   cleaned = cleaned.replace(/\/(auth|storage)\/v1\/?$/, '');
@@ -17,25 +42,230 @@ export function sanitizeSupabaseUrl(url: string): string {
   return cleaned;
 }
 
+export function sanitizeSupabaseKey(rawKey: string): string {
+  if (!rawKey) return '';
+  let cleaned = stripQuotesAndWhitespace(rawKey);
+  if (/^bearer\s+/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^bearer\s+/i, '').trim();
+  }
+  // Eliminar saltos de línea o espacios accidentales al copiar y pegar claves largas
+  cleaned = cleaned.replace(/\s+/g, '');
+  return cleaned;
+}
+
 export function getSanitizedSupabaseUrl(): string {
-  return sanitizeSupabaseUrl(process.env.SUPABASE_URL || '');
+  const rawUrl =
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    '';
+  return sanitizeSupabaseUrl(rawUrl);
 }
 
 export function getSupabaseServiceRoleKey(): string {
-  return (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const rawKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    '';
+  return sanitizeSupabaseKey(rawKey);
+}
+
+export function getSupabaseAnonKey(): string {
+  const rawKey =
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    '';
+  return sanitizeSupabaseKey(rawKey);
+}
+
+function isPlaceholderValue(val: string): boolean {
+  const lower = val.toLowerCase();
+  return (
+    !lower ||
+    lower === 'undefined' ||
+    lower === 'null' ||
+    lower === 'none' ||
+    lower.includes('your-project') ||
+    lower.includes('your_project') ||
+    lower.includes('your-service-role-key') ||
+    lower.includes('your_service_role_key') ||
+    lower.includes('placeholder') ||
+    lower.includes('changeme') ||
+    /^<.*>$/.test(val)
+  );
+}
+
+function decodeJwtPayloadUnsafe(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr = Buffer.from(payloadB64, 'base64').toString('utf-8');
+    const parsed = JSON.parse(jsonStr);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractProjectRefFromUrl(url: string): string | null {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    const match = host.match(/^([a-z0-9-]+)\.supabase\.co$/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isValidSupabaseKeyFormat(key: string): boolean {
+  if (!key || isPlaceholderValue(key)) return false;
+  if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(key)) return true;
+  if (/^sb_secret_[A-Za-z0-9_-]{8,}$/.test(key)) return true;
+  return false;
+}
+
+export function inspectSupabaseConfigIssue(): string | null {
+  const url = getSanitizedSupabaseUrl();
+  const key = getSupabaseServiceRoleKey();
+
+  if (!url || isPlaceholderValue(url)) {
+    return 'Variable SUPABASE_URL no configurada o contiene un valor de ejemplo.';
+  }
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return 'SUPABASE_URL debe iniciar con https://.';
+    }
+  } catch {
+    return 'SUPABASE_URL no tiene un formato de URL válido (ejemplo: https://tu-proyecto.supabase.co).';
+  }
+
+  if (!key || isPlaceholderValue(key)) {
+    return 'Variable SUPABASE_SERVICE_ROLE_KEY no configurada o contiene un valor de ejemplo.';
+  }
+
+  if (key.startsWith('sbp_')) {
+    return 'La clave ingresada en SUPABASE_SERVICE_ROLE_KEY parece ser un Personal Access Token (sbp_...), no la Service Role Key del proyecto.';
+  }
+  if (key.startsWith('sb_publishable_')) {
+    return 'La clave ingresada en SUPABASE_SERVICE_ROLE_KEY es una clave pública (sb_publishable_...). Debe usar la clave secreta / service_role del proyecto.';
+  }
+  if (!isValidSupabaseKeyFormat(key)) {
+    return 'La clave SUPABASE_SERVICE_ROLE_KEY no tiene formato JWT válido (eyJ...) ni clave secreta de Supabase (sb_secret_...).';
+  }
+
+  const jwtPayload = decodeJwtPayloadUnsafe(key);
+  if (jwtPayload) {
+    const urlRef = extractProjectRefFromUrl(url);
+    if (urlRef && jwtPayload.ref && String(jwtPayload.ref).toLowerCase() !== urlRef) {
+      return `Desajuste de proyecto: SUPABASE_URL apunta a "${urlRef}", pero SUPABASE_SERVICE_ROLE_KEY pertenece al proyecto "${jwtPayload.ref}".`;
+    }
+    if (jwtPayload.role && jwtPayload.role !== 'service_role') {
+      return `Rol incorrecto en SUPABASE_SERVICE_ROLE_KEY: el token tiene rol "${jwtPayload.role}" en lugar de "service_role".`;
+    }
+  }
+
+  return null;
+}
+
+export function isSupabaseAuthErrorMessage(msg?: string | null): boolean {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('invalid api key') ||
+    lower.includes('no api key found') ||
+    lower.includes('invalid jwt') ||
+    lower.includes('jwt expired') ||
+    lower.includes('invalidjwttoken') ||
+    lower.includes('signature verification failed')
+  );
+}
+
+const AUTH_CIRCUIT_TTL_MS = 60_000;
+let authCircuitState: { signature: string; errorMessage: string; trippedAt: number; loggedOnce: boolean } | null = null;
+
+function getCurrentConfigSignature(): string {
+  return `${getSanitizedSupabaseUrl()}::${getSupabaseServiceRoleKey()}::${getSupabaseAnonKey()}`;
+}
+
+export function recordSupabaseAuthFailure(errorMessage: string): void {
+  const sig = getCurrentConfigSignature();
+  const alreadyLogged = Boolean(
+    authCircuitState &&
+    authCircuitState.signature === sig &&
+    authCircuitState.loggedOnce
+  );
+  authCircuitState = {
+    signature: sig,
+    errorMessage,
+    trippedAt: Date.now(),
+    loggedOnce: true
+  };
+  if (!alreadyLogged) {
+    console.info(`[SUPABASE] Clave API rechazada (${errorMessage}); usando base de datos local temporalmente hasta corregir credenciales.`);
+  }
+}
+
+export function clearSupabaseAuthFailure(): void {
+  authCircuitState = null;
+}
+
+export function getActiveSupabaseAuthFailure(): string | null {
+  if (!authCircuitState) return null;
+  if (authCircuitState.signature !== getCurrentConfigSignature()) {
+    authCircuitState = null;
+    return null;
+  }
+  if (Date.now() - authCircuitState.trippedAt > AUTH_CIRCUIT_TTL_MS) {
+    return null;
+  }
+  return authCircuitState.errorMessage;
+}
+
+export function getMissingSupabaseEnvVars(): string[] {
+  const missing: string[] = [];
+  const url = getSanitizedSupabaseUrl();
+  const key = getSupabaseServiceRoleKey();
+  if (!url || isPlaceholderValue(url)) {
+    missing.push('SUPABASE_URL');
+  }
+  if (!key || isPlaceholderValue(key)) {
+    missing.push('SUPABASE_SERVICE_ROLE_KEY');
+  }
+  return missing;
 }
 
 let supabaseClientInstance: SupabaseClient | null = null;
+let supabaseClientSignature = '';
+let supabaseAnonClientInstance: SupabaseClient | null = null;
+let supabaseAnonClientSignature = '';
 
 export function isSupabaseConfigured(): boolean {
   const url = getSanitizedSupabaseUrl();
   const key = getSupabaseServiceRoleKey();
-  return Boolean(
-    url &&
-    key &&
-    !url.includes('your-project') &&
-    !key.includes('your-service-role-key')
-  );
+  if (!url || !key || isPlaceholderValue(url) || isPlaceholderValue(key)) {
+    return false;
+  }
+  if (!/^https?:\/\//i.test(url)) return false;
+  if (!isValidSupabaseKeyFormat(key)) return false;
+  // Evitar llamadas condenadas a Invalid API key si el JWT pertenece a otro proyecto
+  const jwtPayload = decodeJwtPayloadUnsafe(key);
+  if (jwtPayload) {
+    const urlRef = extractProjectRefFromUrl(url);
+    if (urlRef && jwtPayload.ref && String(jwtPayload.ref).toLowerCase() !== urlRef) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function isSupabaseOperational(): boolean {
+  if (!isSupabaseConfigured()) return false;
+  if (getActiveSupabaseAuthFailure()) return false;
+  return true;
 }
 
 export function getSupabaseServerClient(): SupabaseClient | null {
@@ -43,16 +273,19 @@ export function getSupabaseServerClient(): SupabaseClient | null {
     return null;
   }
 
-  if (!supabaseClientInstance) {
+  const url = getSanitizedSupabaseUrl();
+  const key = getSupabaseServiceRoleKey();
+  const sig = `${url}::${key}`;
+
+  if (!supabaseClientInstance || supabaseClientSignature !== sig) {
     try {
-      const url = getSanitizedSupabaseUrl();
-      const key = getSupabaseServiceRoleKey();
       supabaseClientInstance = createClient(url, key, {
         auth: {
           persistSession: false,
           autoRefreshToken: false
         }
       });
+      supabaseClientSignature = sig;
     } catch (err) {
       console.error('Error instantiating Supabase server client:', err);
       return null;
@@ -60,6 +293,41 @@ export function getSupabaseServerClient(): SupabaseClient | null {
   }
 
   return supabaseClientInstance;
+}
+
+export function getSupabasePublicClient(): SupabaseClient | null {
+  const url = getSanitizedSupabaseUrl();
+  const anonKey = getSupabaseAnonKey();
+  if (!url || !anonKey || isPlaceholderValue(url) || isPlaceholderValue(anonKey)) {
+    return null;
+  }
+  if (!/^https?:\/\//i.test(url)) return null;
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(anonKey) && !/^sb_publishable_[A-Za-z0-9_-]{8,}$/.test(anonKey)) {
+    return null;
+  }
+  const jwtPayload = decodeJwtPayloadUnsafe(anonKey);
+  if (jwtPayload) {
+    const urlRef = extractProjectRefFromUrl(url);
+    if (urlRef && jwtPayload.ref && String(jwtPayload.ref).toLowerCase() !== urlRef) {
+      return null;
+    }
+  }
+
+  const sig = `${url}::${anonKey}`;
+  if (!supabaseAnonClientInstance || supabaseAnonClientSignature !== sig) {
+    try {
+      supabaseAnonClientInstance = createClient(url, anonKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false
+        }
+      });
+      supabaseAnonClientSignature = sig;
+    } catch {
+      return null;
+    }
+  }
+  return supabaseAnonClientInstance;
 }
 
 export interface SoundItemRecord {
@@ -114,29 +382,79 @@ export interface DownloadTokenRecord {
 // CATÁLOGO: CONSULTA Y PERSISTENCIA EN SUPABASE
 // -----------------------------------------------------------------------------
 
+export class SupabaseAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SupabaseAuthError';
+  }
+}
+
 export async function getSoundItemsFromSupabase(includeDrafts = false): Promise<SoundItemRecord[]> {
   const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    throw new Error('Supabase no está configurado (variables ausentes)');
+  const publicClient = !includeDrafts ? getSupabasePublicClient() : null;
+
+  if (!supabase && !publicClient) {
+    throw new Error('Supabase no está configurado (variables ausentes o formato inválido)');
   }
 
-  let query = supabase
-    .from('sound_items')
-    .select('*')
-    .order('created_at', { ascending: false });
+  if (supabase) {
+    let query = supabase
+      .from('sound_items')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  if (!includeDrafts) {
-    query = query.eq('is_published', true);
-  }
+    if (!includeDrafts) {
+      query = query.eq('is_published', true);
+    }
 
-  const { data, error } = await query;
+    const { data, error } = await query;
 
-  if (error) {
+    if (!error) {
+      clearSupabaseAuthFailure();
+      return (data || []) as SoundItemRecord[];
+    }
+
+    if (isSupabaseAuthErrorMessage(error.message)) {
+      // Para consultas públicas (solo publicados), intentar fallback con SUPABASE_ANON_KEY si está configurada
+      if (!includeDrafts && publicClient) {
+        const { data: pubData, error: pubError } = await publicClient
+          .from('sound_items')
+          .select('*')
+          .eq('is_published', true)
+          .order('created_at', { ascending: false });
+
+        if (!pubError) {
+          return (pubData || []) as SoundItemRecord[];
+        }
+      }
+
+      recordSupabaseAuthFailure(error.message);
+      throw new SupabaseAuthError(`Error en consulta de sound_items: ${error.message}`);
+    }
+
     console.error('Supabase query error on sound_items:', error.message);
     throw new Error(`Error en consulta de sound_items: ${error.message}`);
   }
 
-  return (data || []) as SoundItemRecord[];
+  // Solo consulta pública con anon key si no hay service_role válida
+  if (publicClient) {
+    const { data: pubData, error: pubError } = await publicClient
+      .from('sound_items')
+      .select('*')
+      .eq('is_published', true)
+      .order('created_at', { ascending: false });
+
+    if (pubError) {
+      if (isSupabaseAuthErrorMessage(pubError.message)) {
+        recordSupabaseAuthFailure(pubError.message);
+        throw new SupabaseAuthError(`Error en consulta de sound_items: ${pubError.message}`);
+      }
+      throw new Error(`Error en consulta de sound_items: ${pubError.message}`);
+    }
+    return (pubData || []) as SoundItemRecord[];
+  }
+
+  throw new Error('Supabase no está configurado');
 }
 
 export async function getSoundItemByIdFromSupabase(id: string): Promise<SoundItemRecord | null> {
@@ -804,15 +1122,19 @@ export async function checkSupabaseHealth(): Promise<{
   connected: boolean;
   tablesReady: boolean;
   storageReady: boolean;
+  missingVars: string[];
   message: string;
 }> {
-  if (!isSupabaseConfigured()) {
+  const missingVars = getMissingSupabaseEnvVars();
+  const configIssue = inspectSupabaseConfigIssue();
+  if (configIssue || !isSupabaseConfigured()) {
     return {
-      configured: false,
+      configured: missingVars.length === 0,
       connected: false,
       tablesReady: false,
       storageReady: false,
-      message: 'Variables SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY no configuradas en el entorno.'
+      missingVars,
+      message: configIssue || `Variables ${missingVars.join(' y ')} no configuradas en el entorno del servidor.`
     };
   }
 
@@ -823,6 +1145,7 @@ export async function checkSupabaseHealth(): Promise<{
       connected: false,
       tablesReady: false,
       storageReady: false,
+      missingVars,
       message: 'Fallo al inicializar cliente de Supabase.'
     };
   }
@@ -830,10 +1153,30 @@ export async function checkSupabaseHealth(): Promise<{
   try {
     // 1. Probar consulta a PostgreSQL
     const { error: dbError } = await supabase.from('sound_items').select('id').limit(1);
-    const tablesReady = !dbError;
 
     // 2. Probar acceso a Storage
     const { data: buckets, error: storageError } = await supabase.storage.listBuckets();
+
+    // Detectar explícitamente errores de autenticación / Invalid API key antes de diagnosticar tablas
+    const authErrorMsg =
+      (dbError && isSupabaseAuthErrorMessage(dbError.message) && dbError.message) ||
+      (storageError && isSupabaseAuthErrorMessage(storageError.message) && storageError.message) ||
+      null;
+
+    if (authErrorMsg) {
+      recordSupabaseAuthFailure(authErrorMsg);
+      return {
+        configured: true,
+        connected: false,
+        tablesReady: false,
+        storageReady: false,
+        missingVars: [],
+        message: `Error de autenticación en Supabase (${authErrorMsg}). Verifica que SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY correspondan al mismo proyecto activo y no estén revocadas.`
+      };
+    }
+
+    clearSupabaseAuthFailure();
+    const tablesReady = !dbError;
     const hasAudioBucket = buckets?.some((b) => b.name === 'anomaly-audio-masters');
     const hasCoversBucket = buckets?.some((b) => b.name === 'anomaly-covers');
     const storageReady = !storageError && Boolean(hasAudioBucket && hasCoversBucket);
@@ -843,10 +1186,11 @@ export async function checkSupabaseHealth(): Promise<{
       connected: true,
       tablesReady,
       storageReady,
+      missingVars: [],
       message: tablesReady && storageReady
         ? 'Conexión exitosa con Supabase PostgreSQL y Storage.'
         : !tablesReady
-        ? 'Conectado a Supabase pero las tablas no existen. Ejecuta schema.sql en el SQL Editor.'
+        ? `Conectado a Supabase pero falta preparar las tablas (${dbError?.message || 'sound_items no disponible'}). Ejecuta supabase/schema.sql en el SQL Editor.`
         : 'Conectado a PostgreSQL pero faltan los buckets de Storage anomaly-audio-masters y anomaly-covers.'
     };
   } catch (err: any) {
@@ -855,6 +1199,7 @@ export async function checkSupabaseHealth(): Promise<{
       connected: false,
       tablesReady: false,
       storageReady: false,
+      missingVars: [],
       message: `Error al verificar Supabase: ${err.message}`
     };
   }

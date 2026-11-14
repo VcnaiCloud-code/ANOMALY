@@ -1,22 +1,22 @@
 [
   {
     "id": "item-koko",
-    "section": "samples",
+    "section": "beats",
     "title": "KOKO",
-    "category": "Sample Loop",
+    "category": "",
     "bpm": 130,
     "key": "F# Minor",
     "duration": 4.5,
     "format": "MP3 320kbps",
-    "fileSize": "4.2 MB",
-    "coverImage": "/uploads/covers/1794387491177_TEST_COVER.jpg",
-    "audioUrl": "/uploads/audio/1794387491122_TEST_BEAT_ORIGINAL.wav",
+    "fileSize": "4.1 MB",
+    "coverImage": "/uploads/covers/1794636811231_KOKO.jpg",
+    "audioUrl": "/uploads/audio/1794636810930_KOKO.mp3",
     "isFree": false,
     "price": 19.99,
     "isPublished": true,
     "downloads": 12,
-    "description": "Sample original de alta fidelidad ANOMALY SOUND.",
+    "description": "Beat original de alta fidelidad ANOMALY SOUND.",
     "createdAt": "2026-03-08T12:00:00.000Z",
-    "updatedAt": "2026-11-12T12:51:17.700Z"
+    "updatedAt": "2026-11-14T06:13:31.335Z"
   }
 ]

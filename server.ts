@@ -10,6 +10,7 @@ dotenv.config();
 
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -18,6 +19,9 @@ import { createServer as createViteServer } from 'vite';
 
 import {
   isSupabaseConfigured,
+  isSupabaseOperational,
+  getSupabasePublicClient,
+  SupabaseAuthError,
   getSanitizedSupabaseUrl,
   sanitizeSupabaseUrl,
   getSupabaseServerClient,
@@ -138,7 +142,7 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
 const localRevokedSessions = new Set<string>();
 
 async function isSessionRevoked(sessionId: string): Promise<{ revoked: boolean; error?: string }> {
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     try {
       const isRevokedInDb = await isSessionRevokedInSupabase(sessionId);
       if (isRevokedInDb.revoked) return { revoked: true };
@@ -151,7 +155,7 @@ async function isSessionRevoked(sessionId: string): Promise<{ revoked: boolean; 
 
 async function persistRevokedSession(sessionId: string, expiresAt?: Date) {
   localRevokedSessions.add(sessionId);
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     await revokeSessionInSupabase(sessionId, expiresAt);
   }
 }
@@ -165,7 +169,7 @@ interface LoginAttemptRecord {
 const localLoginAttempts = new Map<string, LoginAttemptRecord>();
 
 async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; remainingSeconds?: number; isError?: boolean }> {
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     try {
       const dbCheck = await checkLoginRateLimitInSupabase(ip);
       if (!dbCheck.error && !dbCheck.isTableMissing && !dbCheck.allowed) return dbCheck;
@@ -198,7 +202,7 @@ async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; rema
 }
 
 async function recordFailedLogin(ip: string) {
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     await recordFailedLoginInSupabase(ip);
   }
 
@@ -215,7 +219,7 @@ async function recordFailedLogin(ip: string) {
 }
 
 async function clearLoginAttempts(ip: string) {
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     await clearLoginAttemptsInSupabase(ip);
   }
   localLoginAttempts.delete(ip);
@@ -456,7 +460,7 @@ function writeLocalSiteConfig(config: SiteConfig): boolean {
 
 async function getEffectiveSiteConfig(): Promise<SiteConfig> {
   let config = readLocalSiteConfig();
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     try {
       const remoteVal = await getSiteSettingFromSupabase('hero_image_config');
       if (remoteVal) {
@@ -483,7 +487,7 @@ async function saveEffectiveSiteConfig(config: SiteConfig): Promise<boolean> {
     heroFraming: normalizeHeroFraming(config.heroFraming)
   };
   const localOk = writeLocalSiteConfig(normalized);
-  if (isSupabaseConfigured()) {
+  if (isSupabaseOperational()) {
     try {
       const ok = await setSiteSettingInSupabase('hero_image_config', JSON.stringify(normalized));
       if (!ok) {
@@ -779,8 +783,21 @@ async function startServer() {
 
       const writeStream = fs.createWriteStream(targetPath);
       let totalBytes = 0;
-      let firstChunk: Buffer | null = null;
+      const headerChunks: Buffer[] = [];
+      let headerBytesLen = 0;
+      let headerValidated = false;
       let isRejected = false;
+
+      const rejectStream = (status: number, errorMsg: string) => {
+        if (isRejected) return;
+        isRejected = true;
+        req.unpipe(writeStream);
+        writeStream.destroy();
+        if (fs.existsSync(targetPath)) {
+          try { fs.unlinkSync(targetPath); } catch {}
+        }
+        return res.status(status).json({ error: errorMsg });
+      };
 
       req.on('data', (chunk: Buffer) => {
         if (isRejected) return;
@@ -789,25 +806,22 @@ async function startServer() {
         // Comprobar límite
         const limit = kind === 'audio' ? 500 * 1024 * 1024 : 10 * 1024 * 1024;
         if (totalBytes > limit) {
-          isRejected = true;
-          writeStream.destroy();
-          if (fs.existsSync(targetPath)) {
-            try { fs.unlinkSync(targetPath); } catch {}
-          }
-          return res.status(400).json({ error: 'El archivo excede el tamaño máximo permitido.' });
+          rejectStream(400, 'El archivo excede el tamaño máximo permitido.');
+          return;
         }
 
-        // Validar magic bytes en primer chunk
-        if (!firstChunk && chunk.length >= 4) {
-          firstChunk = chunk;
-          const magicCheck = validateFileMagicBytes(firstChunk, ext, kind as 'audio' | 'cover');
-          if (!magicCheck.valid) {
-            isRejected = true;
-            writeStream.destroy();
-            if (fs.existsSync(targetPath)) {
-              try { fs.unlinkSync(targetPath); } catch {}
+        // Acumular al menos 12 bytes para validar firmas RIFF/WAVE, FORM/AIFF o RIFF/WEBP de forma determinista
+        if (!headerValidated) {
+          headerChunks.push(chunk);
+          headerBytesLen += chunk.length;
+          if (headerBytesLen >= 12) {
+            headerValidated = true;
+            const headBuf = Buffer.concat(headerChunks, Math.min(headerBytesLen, 64));
+            const magicCheck = validateFileMagicBytes(headBuf, ext, kind as 'audio' | 'cover');
+            if (!magicCheck.valid) {
+              rejectStream(400, `Firma binaria no válida: ${magicCheck.reason}`);
+              return;
             }
-            return res.status(400).json({ error: `Firma binaria no válida: ${magicCheck.reason}` });
           }
         }
       });
@@ -816,6 +830,16 @@ async function startServer() {
 
       writeStream.on('finish', () => {
         if (isRejected) return;
+        if (!headerValidated) {
+          const headBuf = Buffer.concat(headerChunks);
+          const magicCheck = validateFileMagicBytes(headBuf, ext, kind as 'audio' | 'cover');
+          if (!magicCheck.valid) {
+            if (fs.existsSync(targetPath)) {
+              try { fs.unlinkSync(targetPath); } catch {}
+            }
+            return res.status(400).json({ error: `Firma binaria no válida: ${magicCheck.reason}` });
+          }
+        }
         const subDir = kind === 'audio' ? 'audio' : 'covers';
         return res.json({
           success: true,
@@ -926,6 +950,13 @@ async function startServer() {
           if (!allowedCoverExts.includes(ext)) {
             return res.status(400).json({
               error: `Extensión de imagen no admitida (${ext}). Permitidas: PNG, JPG, WEBP.`
+            });
+          }
+
+          const coverMagicCheck = validateFileMagicBytes(buffer, ext, 'cover');
+          if (!coverMagicCheck.valid) {
+            return res.status(400).json({
+              error: `Firma binaria de imagen no válida: ${coverMagicCheck.reason}`
             });
           }
 
@@ -1233,10 +1264,8 @@ async function startServer() {
   });
 
   // --- PUBLIC CATALOG ROUTE ---
-  // When Supabase is configured, Supabase PostgreSQL is the SOLE authority.
-  // Never falls back to local demo data if database is empty or fails.
   app.get('/api/catalog', async (req: Request, res: Response) => {
-    if (isSupabaseConfigured()) {
+    if (isSupabaseOperational() || Boolean(getSupabasePublicClient())) {
       try {
         const supabaseItems = await getSoundItemsFromSupabase(false);
         const formatted = (supabaseItems || []).map((it) => ({
@@ -1259,14 +1288,15 @@ async function startServer() {
           description: it.description,
           createdAt: it.created_at
         }));
-        // Devuelve exactamente el catálogo de PostgreSQL (incluso si está vacío [])
         return res.json(formatted);
       } catch (err: any) {
-        console.warn('Supabase public catalog query failed, using local database fallback:', err.message);
+        if (!(err instanceof SupabaseAuthError)) {
+          console.warn('Supabase public catalog query failed, using local database fallback:', err.message);
+        }
       }
     }
 
-    // Modo local cuando Supabase no está configurado o no responde
+    // Modo local cuando Supabase no está configurado o las credenciales no son válidas
     const items = readLocalDatabase();
     const publishedOnly = items
       .filter((it) => it.isPublished !== false)
@@ -1279,7 +1309,7 @@ async function startServer() {
 
   // --- PROTECTED ADMIN CATALOG ROUTE ---
   app.get('/api/admin/catalog', requireAdminAuth, async (req: Request, res: Response) => {
-    if (isSupabaseConfigured()) {
+    if (isSupabaseOperational()) {
       try {
         const supabaseItems = await getSoundItemsFromSupabase(true);
         const formatted = supabaseItems.map((it) => ({
@@ -1305,7 +1335,9 @@ async function startServer() {
         }));
         return res.json(formatted);
       } catch (err: any) {
-        console.warn('Supabase admin catalog query failed, using local database fallback:', err.message);
+        if (!(err instanceof SupabaseAuthError)) {
+          console.warn('Supabase admin catalog query failed, using local database fallback:', err.message);
+        }
       }
     }
 
@@ -1387,19 +1419,33 @@ async function startServer() {
       } else if (isSupabaseConfigured() && newItemPayload.audio_storage_path) {
         const supabase = getSupabaseServerClient();
         if (supabase) {
-          const { data: fileBlob, error: downloadErr } = await supabase.storage
-            .from('anomaly-audio-masters')
-            .download(newItemPayload.audio_storage_path);
-
-          if (downloadErr || !fileBlob) {
-            return res.status(400).json({
-              error: `El archivo master especificado no existe en el almacenamiento privado (anomaly-audio-masters): ${downloadErr?.message || ''}`
-            });
+          let headBuffer: Buffer | null = null;
+          const signedUrl = await createSignedAudioUrl(newItemPayload.audio_storage_path, 120);
+          if (signedUrl) {
+            try {
+              const rangeRes = await fetch(signedUrl, { headers: { Range: 'bytes=0-63' } });
+              if (rangeRes.ok) {
+                headBuffer = Buffer.from(await rangeRes.arrayBuffer());
+              }
+            } catch {
+              // Fallback a descarga directa
+            }
           }
 
-          // Validar bytes reales del archivo descargado directamente de Supabase Storage
-          const arrayBuffer = await fileBlob.slice(0, 64).arrayBuffer();
-          const headBuffer = Buffer.from(arrayBuffer);
+          if (!headBuffer) {
+            const { data: fileBlob, error: downloadErr } = await supabase.storage
+              .from('anomaly-audio-masters')
+              .download(newItemPayload.audio_storage_path);
+
+            if (downloadErr || !fileBlob) {
+              return res.status(400).json({
+                error: `El archivo master especificado no existe en el almacenamiento privado (anomaly-audio-masters): ${downloadErr?.message || ''}`
+              });
+            }
+            const arrayBuffer = await fileBlob.slice(0, 64).arrayBuffer();
+            headBuffer = Buffer.from(arrayBuffer);
+          }
+
           const ext = path.extname(newItemPayload.audio_storage_path).toLowerCase();
           const magicCheck = validateFileMagicBytes(headBuffer, ext, 'audio');
           if (!magicCheck.valid) {
@@ -1462,6 +1508,10 @@ async function startServer() {
     try {
       const { id } = req.params;
       const patch = req.body;
+      const validSections = new Set(['one_shots', 'beats', 'samples']);
+      const requestedSection = (typeof patch.section === 'string' && validSections.has(patch.section))
+        ? (patch.section as 'one_shots' | 'beats' | 'samples')
+        : undefined;
 
       const safePatchCover = (typeof patch.coverImage === 'string' && patch.coverImage.trim() && !patch.coverImage.startsWith('blob:'))
         ? patch.coverImage.trim()
@@ -1481,7 +1531,7 @@ async function startServer() {
 
         const updated = await upsertSoundItemInSupabase({
           id,
-          section: patch.section || existing.section,
+          section: requestedSection || existing.section,
           title: (typeof patch.title === 'string' && patch.title.trim()) ? patch.title.trim().toUpperCase() : existing.title,
           category: patch.category !== undefined ? patch.category : existing.category,
           bpm: patch.bpm !== undefined ? patch.bpm : existing.bpm,
@@ -1519,7 +1569,7 @@ async function startServer() {
 
       const updatedItem: SoundItemDb = {
         ...existingItem,
-        section: patch.section || existingItem.section,
+        section: requestedSection || existingItem.section,
         title: (typeof patch.title === 'string' && patch.title.trim()) ? patch.title.trim().toUpperCase() : existingItem.title,
         category: patch.category !== undefined ? patch.category : existingItem.category,
         bpm: patch.bpm !== undefined ? patch.bpm : existingItem.bpm,
@@ -2368,10 +2418,15 @@ async function startServer() {
     });
   });
 
+  const httpServer = http.createServer(app);
+
   // --- VITE MIDDLEWARE / PRODUCTION STATIC SERVING ---
   if (!isProduction) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ws: { server: httpServer }
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
@@ -2383,7 +2438,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[ANOMALY SOUND] Server running on http://0.0.0.0:${PORT}`);
   });
 }

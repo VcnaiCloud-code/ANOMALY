@@ -19,9 +19,9 @@ import {
   playBuffer,
   stopCurrentAudio,
   getAudioBufferForItem,
-  audioBufferToWavBlob,
   setMasterVolume
 } from './utils/audioEngine';
+import { smoothScrollEngine } from './utils/smoothScroll';
 
 export default function App() {
   // 1. Detección de ruta privada /admin
@@ -120,23 +120,61 @@ export default function App() {
   const getTimeRef = useRef<(() => number) | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const heroCtaRef = useRef<HTMLButtonElement | null>(null);
+  const headerScrolledRef = useRef(false);
 
-  // Scroll listener para el header
+  // Motor de Smooth Scrolling adaptativo y listener ligero (sin reflows por frame)
   useEffect(() => {
-    const onScroll = () => {
-      setHeaderScrolled(window.scrollY > 40);
-      if (heroCtaRef.current) {
-        const rect = heroCtaRef.current.getBoundingClientRect();
-        setHeaderCtaVisible(rect.bottom < 0);
+    smoothScrollEngine.init();
+    let rafPending = false;
+
+    const updateHeaderScroll = () => {
+      rafPending = false;
+      const nextScrolled = window.scrollY > 40;
+      if (headerScrolledRef.current !== nextScrolled) {
+        headerScrolledRef.current = nextScrolled;
+        setHeaderScrolled(nextScrolled);
       }
     };
+
+    const onScroll = () => {
+      if (!rafPending) {
+        rafPending = true;
+        requestAnimationFrame(updateHeaderScroll);
+      }
+    };
+
     window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
+    updateHeaderScroll();
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      smoothScrollEngine.destroy();
+    };
   }, []);
 
-  // Revelado progresivo con IntersectionObserver
+  // Observador sin layout thrashing para mostrar el CTA del header al superar el Hero CTA
   useEffect(() => {
+    if (isAdminPath) {
+      setHeaderCtaVisible(false);
+      return;
+    }
+    const target = heroCtaRef.current;
+    if (!target) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setHeaderCtaVisible(!entry.isIntersecting && entry.boundingClientRect.bottom < 0);
+      },
+      { threshold: 0 }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [isAdminPath]);
+
+  // Revelado progresivo con IntersectionObserver optimizado
+  useEffect(() => {
+    if (isAdminPath) return;
+
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -146,7 +184,7 @@ export default function App() {
           }
         });
       },
-      { threshold: 0.12 }
+      { threshold: 0.08, rootMargin: '0px 0px -24px 0px' }
     );
 
     const revealElements = document.querySelectorAll('.reveal');
@@ -156,7 +194,7 @@ export default function App() {
     });
 
     return () => observer.disconnect();
-  }, [catalogItems]);
+  }, [catalogItems, isAdminPath]);
 
   // Loop de animación para barra de progreso
   useEffect(() => {
@@ -326,11 +364,15 @@ export default function App() {
   }
 
   function scrollToAnchor(id: string) {
+    if (id === 'top') {
+      smoothScrollEngine.scrollTo(0);
+      return;
+    }
     const el = document.getElementById(id);
     if (el) {
       const headerH = 75;
-      const y = id === 'top' ? 0 : el.getBoundingClientRect().top + window.scrollY - headerH;
-      window.scrollTo({ top: y, behavior: 'smooth' });
+      const y = el.getBoundingClientRect().top + window.scrollY - headerH;
+      smoothScrollEngine.scrollTo(y);
     }
   }
 
@@ -387,11 +429,8 @@ export default function App() {
             scrollToAnchor('top');
           }}
           className="logo"
-          aria-label="ANOMALY SOUND, inicio"
+          aria-label="Inicio"
         >
-          <span className="logo-name">
-            ANOMALY SOUND
-          </span>
           <span className="logo-beta">BETA</span>
         </a>
 
@@ -480,32 +519,32 @@ export default function App() {
               <span className="l2">ANOMALY</span>
               <span className="l3">SOUND</span>
             </h1>
-            <div className="hero-actions">
-              <button
-                ref={heroCtaRef}
-                className="btn btn-dl"
-                id="heroCta"
-                onClick={() => scrollToAnchor('one-shots')}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
-                </svg>
-                Explorar catálogo
-              </button>
-              <a
-                href="#beats"
-                onClick={(e) => {
-                  e.preventDefault();
-                  scrollToAnchor('beats');
-                }}
-                className="arrow-link"
-              >
-                Ver beats y samples
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-                  <path d="M5 12h14M13 6l6 6-6 6" />
-                </svg>
-              </a>
-            </div>
+          </div>
+          <div className="hero-actions">
+            <button
+              ref={heroCtaRef}
+              className="btn btn-dl"
+              id="heroCta"
+              onClick={() => scrollToAnchor('one-shots')}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
+              </svg>
+              Explorar catálogo
+            </button>
+            <a
+              href="#beats"
+              onClick={(e) => {
+                e.preventDefault();
+                scrollToAnchor('beats');
+              }}
+              className="arrow-link"
+            >
+              Ver beats y samples
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M5 12h14M13 6l6 6-6 6" />
+              </svg>
+            </a>
           </div>
         </div>
       </section>
@@ -522,7 +561,7 @@ export default function App() {
 
           <div className="catalog-grid">
             {oneShots.length === 0 ? (
-              <div className="col-span-full py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
+              <div className="w-full max-w-xl mx-auto py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
                 No hay librerías disponibles actualmente en el catálogo.
               </div>
             ) : oneShots.map((item) => {
@@ -535,17 +574,26 @@ export default function App() {
                   <div className="space-y-4">
                     {/* Artwork sin etiquetas técnicas */}
                     <div className="catalog-art">
-                      <img src={item.coverImage} alt={item.title} loading="lazy" />
+                      <img
+                        src={item.coverImage || DEFAULT_HERO_IMAGE}
+                        alt={item.title}
+                        loading="lazy"
+                        onError={(e) => {
+                          if (e.currentTarget.src !== window.location.origin + DEFAULT_HERO_IMAGE) {
+                            e.currentTarget.src = DEFAULT_HERO_IMAGE;
+                          }
+                        }}
+                      />
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-2 text-center">
                       <h3 className="wide font-black text-xl tracking-tight text-white uppercase font-display">
                         {item.title}
                       </h3>
 
                       {/* Solo tempo y nota musical cuando tengan un valor real */}
                       {(hasBpm || hasKey) && (
-                        <ul className="kit-facts">
+                        <ul className="kit-facts justify-center">
                           {hasBpm && <li>{item.bpm} BPM</li>}
                           {hasKey && <li>Key {item.key}</li>}
                         </ul>
@@ -554,7 +602,7 @@ export default function App() {
                   </div>
 
                   {/* Acciones: Preview y Descarga / Compra */}
-                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-between gap-3">
+                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-center flex-wrap gap-3">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
                       onClick={() => handlePlayItem(item)}
@@ -622,7 +670,7 @@ export default function App() {
 
           <div className="catalog-grid">
             {beats.length === 0 ? (
-              <div className="col-span-full py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
+              <div className="w-full max-w-xl mx-auto py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
                 No hay beats disponibles actualmente en el catálogo.
               </div>
             ) : beats.map((beat) => {
@@ -634,17 +682,26 @@ export default function App() {
                 <article key={beat.id} className="catalog-card reveal">
                   <div className="space-y-4">
                     <div className="catalog-art">
-                      <img src={beat.coverImage} alt={beat.title} loading="lazy" />
+                      <img
+                        src={beat.coverImage || DEFAULT_HERO_IMAGE}
+                        alt={beat.title}
+                        loading="lazy"
+                        onError={(e) => {
+                          if (e.currentTarget.src !== window.location.origin + DEFAULT_HERO_IMAGE) {
+                            e.currentTarget.src = DEFAULT_HERO_IMAGE;
+                          }
+                        }}
+                      />
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-2 text-center">
                       <h3 className="wide font-black text-xl tracking-tight text-white uppercase font-display">
                         {beat.title}
                       </h3>
 
                       {/* Solo tempo y nota musical cuando tengan un valor real */}
                       {(hasBpm || hasKey) && (
-                        <ul className="kit-facts">
+                        <ul className="kit-facts justify-center">
                           {hasBpm && <li>{beat.bpm} BPM</li>}
                           {hasKey && <li>Key {beat.key}</li>}
                         </ul>
@@ -652,7 +709,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-between gap-3">
+                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-center flex-wrap gap-3">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
                       onClick={() => handlePlayItem(beat)}
@@ -720,7 +777,7 @@ export default function App() {
 
           <div className="catalog-grid">
             {samples.length === 0 ? (
-              <div className="col-span-full py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
+              <div className="w-full max-w-xl mx-auto py-12 px-6 rounded-2xl bg-white/[0.02] border border-white/[0.05] text-center text-xs font-mono text-zinc-500">
                 No hay samples disponibles actualmente en el catálogo.
               </div>
             ) : samples.map((sample) => {
@@ -732,17 +789,26 @@ export default function App() {
                 <article key={sample.id} className="catalog-card reveal">
                   <div className="space-y-4">
                     <div className="catalog-art">
-                      <img src={sample.coverImage} alt={sample.title} loading="lazy" />
+                      <img
+                        src={sample.coverImage || DEFAULT_HERO_IMAGE}
+                        alt={sample.title}
+                        loading="lazy"
+                        onError={(e) => {
+                          if (e.currentTarget.src !== window.location.origin + DEFAULT_HERO_IMAGE) {
+                            e.currentTarget.src = DEFAULT_HERO_IMAGE;
+                          }
+                        }}
+                      />
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-2 text-center">
                       <h3 className="wide font-black text-xl tracking-tight text-white uppercase font-display">
                         {sample.title}
                       </h3>
 
                       {/* Solo tempo y nota musical cuando tengan un valor real */}
                       {(hasBpm || hasKey) && (
-                        <ul className="kit-facts">
+                        <ul className="kit-facts justify-center">
                           {hasBpm && <li>{sample.bpm} BPM</li>}
                           {hasKey && <li>Key {sample.key}</li>}
                         </ul>
@@ -750,7 +816,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-between gap-3">
+                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-center flex-wrap gap-3">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
                       onClick={() => handlePlayItem(sample)}
@@ -809,43 +875,7 @@ export default function App() {
       {/* ---------- FOOTER ---------- */}
       <footer>
         <div className="wrap">
-          <div className="flex items-center gap-2">
-            <span>© 2026 ANOMALY SOUND · Librerías, Beats & Samples</span>
-            <a
-              href="/admin"
-              onClick={(e) => {
-                e.preventDefault();
-                window.history.pushState(null, '', '/admin');
-                setIsAdminPath(true);
-              }}
-              className="opacity-30 hover:opacity-100 text-[11px] font-mono transition-opacity ml-3"
-              title="Acceso administrativo"
-            >
-              Admin
-            </a>
-          </div>
-          <div className="socials">
-            <a href="https://instagram.com/anomalysound" target="_blank" rel="noopener noreferrer" aria-label="Instagram">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                <rect x="3" y="3" width="18" height="18" rx="5" />
-                <circle cx="12" cy="12" r="4" />
-                <circle cx="17.2" cy="6.8" r="1" fill="currentColor" />
-              </svg>
-            </a>
-            <a href="https://www.beatstars.com/anomalysound" target="_blank" rel="noopener noreferrer" aria-label="BeatStars">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-                <path d="M4 15V9a8 8 0 0 1 16 0v6" />
-                <rect x="3" y="14" width="4" height="6" rx="1.4" />
-                <rect x="17" y="14" width="4" height="6" rx="1.4" />
-              </svg>
-            </a>
-            <a href="https://youtube.com/@anomalysound" target="_blank" rel="noopener noreferrer" aria-label="YouTube">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                <rect x="2.5" y="6" width="19" height="12" rx="4" />
-                <path d="M10.5 9.3v5.4l4.6-2.7z" fill="currentColor" />
-              </svg>
-            </a>
-          </div>
+          <span>© 2026 ANOMALY SOUND · Librerías, Beats & Samples</span>
         </div>
       </footer>
 

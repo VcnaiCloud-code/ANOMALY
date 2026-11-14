@@ -23,11 +23,13 @@ import {
   Maximize2,
   Minimize2,
   RotateCcw,
-  Save
+  Save,
+  Database
 } from 'lucide-react';
 import { CatalogSection, HeroFraming, SoundItem } from '../types/sound';
 import {
   DEFAULT_HERO_FRAMING,
+  SupabaseHealthStatus,
   deleteAudioBlob,
   getAdminSession,
   getAdminToken,
@@ -48,7 +50,9 @@ import {
   fetchHeroImageApi,
   updateHeroImageApi,
   updateHeroFramingApi,
-  resetHeroImageApi
+  resetHeroImageApi,
+  fetchSupabaseStatusApi,
+  migrateToSupabaseApi
 } from '../utils/storage';
 import { getAudioContext, playBuffer, stopCurrentAudio, getAudioBufferForItem, decodeAudio } from '../utils/audioEngine';
 
@@ -143,8 +147,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusFeedback, setStatusFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Métricas de almacenamiento
+  // Métricas de almacenamiento y estado de Supabase
   const [storageUsage, setStorageUsage] = useState({ usedMB: 0, trackBlobsCount: 0 });
+  const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthStatus | null>(null);
+  const [isMigratingToSupabase, setIsMigratingToSupabase] = useState(false);
 
   // Categorías sugeridas según sección
   const suggestedCategories: Record<CatalogSection, string[]> = {
@@ -162,11 +168,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
           setItems(data);
         });
         getStorageUsage().then(setStorageUsage);
+        fetchSupabaseStatusApi().then(setSupabaseHealth);
       } else if (isAdmin) {
         fetchAdminCatalogApi().then((data) => {
           setItems(data);
         });
         getStorageUsage().then(setStorageUsage);
+        fetchSupabaseStatusApi().then(setSupabaseHealth);
       }
     });
   }, [isAdmin]);
@@ -646,6 +654,39 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     }
   }
 
+  async function handleMigrateToSupabase() {
+    setIsMigratingToSupabase(true);
+    try {
+      const token = getAdminToken();
+      const res = await migrateToSupabaseApi(token || undefined);
+      const refreshedHealth = await fetchSupabaseStatusApi(token || undefined);
+      if (refreshedHealth) setSupabaseHealth(refreshedHealth);
+
+      if (res.success) {
+        const fresh = await fetchAdminCatalogApi(token || undefined);
+        setItems(fresh);
+        onCatalogUpdated();
+        setStatusFeedback({
+          type: 'success',
+          message: `Sincronización completada: ${res.migratedCount || 0} migrados, ${res.skippedCount || 0} ya existentes en Supabase.`
+        });
+      } else {
+        setStatusFeedback({
+          type: 'error',
+          message: res.error || res.errors?.[0] || 'No se pudo completar la sincronización con Supabase.'
+        });
+      }
+    } catch (err: any) {
+      setStatusFeedback({
+        type: 'error',
+        message: err.message || 'Error al sincronizar datos con Supabase.'
+      });
+    } finally {
+      setIsMigratingToSupabase(false);
+      setTimeout(() => setStatusFeedback(null), 5000);
+    }
+  }
+
   // Guardar edición de un elemento existente
   async function handleSaveEditedItem(e: React.FormEvent) {
     e.preventDefault();
@@ -655,16 +696,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
     try {
       const token = getAdminToken();
-      let finalCoverUrl = editingItem.coverImage;
-      if (selectedCoverFile) {
-        const coverRes = await uploadFileApi(selectedCoverFile, 'cover', token || undefined);
-        if (!coverRes.success || !coverRes.url || coverRes.url.startsWith('blob:')) {
-          throw new Error(coverRes.error || 'No se pudo subir la nueva portada. Se conservó la portada anterior.');
-        }
-        finalCoverUrl = coverRes.url;
-      }
-
       const patch: Partial<SoundItem> = {
+        section: editingItem.section,
         title: editingItem.title.toUpperCase(),
         category: editingItem.category,
         bpm: editingItem.section === 'one_shots' ? undefined : editingItem.bpm,
@@ -673,7 +706,6 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         format: editingItem.format,
         isFree: editingItem.isFree,
         price: editingItem.isFree ? 0 : editingItem.price,
-        ...(finalCoverUrl && !finalCoverUrl.startsWith('blob:') ? { coverImage: finalCoverUrl } : {}),
         isPublished: editingItem.isPublished
       };
 
@@ -686,7 +718,6 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       setItems(fresh);
       onCatalogUpdated();
       setEditingItem(null);
-      setSelectedCoverFile(null);
 
       setStatusFeedback({ type: 'success', message: 'Elemento actualizado correctamente.' });
     } catch (err: any) {
@@ -984,6 +1015,66 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Estado de conexión con Supabase */}
+        {supabaseHealth && (
+          <div
+            className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady
+                ? 'bg-emerald-950/20 border-emerald-500/25 text-emerald-200'
+                : 'bg-amber-950/25 border-amber-500/30 text-amber-200'
+            }`}
+          >
+            <div className="flex items-start sm:items-center gap-3">
+              <Database
+                className={`w-4 h-4 shrink-0 mt-0.5 sm:mt-0 ${
+                  supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady
+                    ? 'text-emerald-400'
+                    : 'text-amber-400'
+                }`}
+              />
+              <div className="space-y-0.5">
+                <div className="text-xs font-mono font-bold uppercase tracking-wider">
+                  {supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady
+                    ? 'Supabase Conectado (PostgreSQL + Storage Activos)'
+                    : !supabaseHealth.configured
+                    ? 'Modo Local Activo — Supabase no conectado en el servidor'
+                    : 'Supabase Conectado con Configuración Pendiente'}
+                </div>
+                <p className="text-[11px] font-mono opacity-85">
+                  {supabaseHealth.configured
+                    ? supabaseHealth.message
+                    : `Faltan las variables de entorno ${
+                        supabaseHealth.missingVars?.length
+                          ? supabaseHealth.missingVars.join(' y ')
+                          : 'SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY'
+                      } en la configuración del entorno. Mientras tanto los archivos se guardan localmente en el servidor.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady && (
+                <button
+                  type="button"
+                  onClick={handleMigrateToSupabase}
+                  disabled={isMigratingToSupabase}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-[11px] font-mono font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+                >
+                  {isMigratingToSupabase ? 'Sincronizando...' : 'Sincronizar Local → Supabase'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => fetchSupabaseStatusApi().then(setSupabaseHealth)}
+                className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs font-mono text-white transition-colors"
+                title="Volver a comprobar conexión con Supabase"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {currentView === 'site_customization' ? (
           /* ========================================================================= */
@@ -1327,7 +1418,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             )}
 
             <button
-              onClick={() => setShowUploadForm(!showUploadForm)}
+              onClick={() => {
+                if (showUploadForm) {
+                  setSelectedAudioFile(null);
+                  setSelectedCoverFile(null);
+                  setCoverPreviewUrl('');
+                }
+                setShowUploadForm(!showUploadForm);
+              }}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-bold uppercase tracking-wider transition-all shadow-md"
             >
               {showUploadForm ? (
@@ -1358,7 +1456,12 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </p>
               </div>
               <button
-                onClick={() => setShowUploadForm(false)}
+                onClick={() => {
+                  setShowUploadForm(false);
+                  setSelectedAudioFile(null);
+                  setSelectedCoverFile(null);
+                  setCoverPreviewUrl('');
+                }}
                 className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
@@ -2007,25 +2110,19 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                {editingItem.section !== 'one_shots' ? (
-                  <div>
-                    <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Tempo (BPM)</label>
-                    <input
-                      type="number"
-                      value={editingItem.bpm || 140}
-                      onChange={(e) => setEditingItem({ ...editingItem, bpm: Number(e.target.value) })}
-                      className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Sección</label>
-                    <div className="px-3 py-2 rounded-xl bg-white/[0.02] border border-white/5 text-zinc-400 font-mono text-xs">
-                      Librerías (One-Shots)
-                    </div>
-                  </div>
-                )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Sección del Catálogo</label>
+                  <select
+                    value={editingItem.section}
+                    onChange={(e) => setEditingItem({ ...editingItem, section: e.target.value as CatalogSection })}
+                    className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                  >
+                    <option value="one_shots">Librerías (One-Shots)</option>
+                    <option value="beats">Beats</option>
+                    <option value="samples">Samples</option>
+                  </select>
+                </div>
 
                 <div>
                   <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Formato de Entrega</label>
@@ -2038,6 +2135,18 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   />
                 </div>
               </div>
+
+              {editingItem.section !== 'one_shots' && (
+                <div>
+                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Tempo (BPM)</label>
+                  <input
+                    type="number"
+                    value={editingItem.bpm || 140}
+                    onChange={(e) => setEditingItem({ ...editingItem, bpm: Number(e.target.value) })}
+                    className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Descripción</label>
