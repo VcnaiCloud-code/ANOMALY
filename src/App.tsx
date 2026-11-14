@@ -23,6 +23,14 @@ import {
 } from './utils/audioEngine';
 import { smoothScrollEngine } from './utils/smoothScroll';
 
+const MARQUEE_PHRASES = [
+  '#LAANOMALÍA',
+  '#MUCHOFLOW',
+  '#EN16ELSPLIT',
+  '#ELMASQUEROMPEENTOLOSRITMOS'
+];
+const MARQUEE_REPEATS = [0, 1, 2];
+
 export default function App() {
   // 1. Detección de ruta privada /admin
   const [isAdminPath, setIsAdminPath] = useState<boolean>(() => {
@@ -568,7 +576,7 @@ export default function App() {
         <div className="hero-content">
           <div className="hero-text">
             <h1>
-              <span className="l1">El sonido de</span>
+              
               <span className="l2">ANOMALY</span>
               <span className="l3">SOUND</span>
             </h1>
@@ -601,6 +609,30 @@ export default function App() {
           </div>
         </div>
       </section>
+
+      {/* ---------- MARQUESINA INFINITA ---------- */}
+      <div className="ticker" role="region" aria-label="Frases de ANOMALY SOUND">
+        <div className="ticker-track">
+          <div className="ticker-group">
+            {MARQUEE_REPEATS.map((rep) =>
+              MARQUEE_PHRASES.map((phrase, idx) => (
+                <span key={`a-${rep}-${idx}`} className="ticker-item">
+                  {phrase}
+                </span>
+              ))
+            )}
+          </div>
+          <div className="ticker-group" aria-hidden="true">
+            {MARQUEE_REPEATS.map((rep) =>
+              MARQUEE_PHRASES.map((phrase, idx) => (
+                <span key={`b-${rep}-${idx}`} className="ticker-item">
+                  {phrase}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* ---------- 2. CATÁLOGO: LIBRERÍAS ---------- */}
       <section className="section" id="one-shots">

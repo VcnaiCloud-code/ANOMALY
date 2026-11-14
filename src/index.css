@@ -239,6 +239,77 @@
   .hero-controls .swipe-hint { margin-left: auto; }
 }
 
+/* ---------- marquesina infinita debajo del hero ---------- */
+.ticker {
+  --ticker-gap: 80px;
+  position: relative;
+  width: 100%;
+  height: var(--tick);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(11, 11, 13, 0.92) 0%, rgba(5, 5, 5, 0.98) 100%);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 7%, #000 93%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 7%, #000 93%, transparent 100%);
+}
+
+.ticker-track {
+  display: flex;
+  align-items: center;
+  width: max-content;
+  will-change: transform;
+  backface-visibility: hidden;
+  animation: ticker-scroll 34s linear infinite;
+}
+
+.ticker-group {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--ticker-gap);
+  padding-right: var(--ticker-gap);
+}
+
+.ticker-item {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: 'Archivo', system-ui, -apple-system, sans-serif;
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: 0.85rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(235, 236, 240, 0.78);
+  line-height: 1;
+}
+
+@keyframes ticker-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@media (max-width: 52rem) {
+  .ticker {
+    --ticker-gap: 40px;
+    height: 3.5rem;
+  }
+  .ticker-track {
+    animation-duration: 24s;
+  }
+  .ticker-item {
+    font-size: 0.76rem;
+    letter-spacing: 0.12em;
+  }
+}
+
 /* ---------- catálogos: ONE SHOTS, BEATS, SAMPLES ---------- */
 .catalog-grid {
   display: flex;
@@ -707,6 +778,7 @@ footer .wrap { display: flex; justify-content: center; align-items: center; text
   .catalog-art.is-playing img,
   .player.open .player-art,
   .sheet.open .sheet-head img,
+  .ticker-track,
   .admin-ambient-orb-1,
   .admin-ambient-orb-2,
   .admin-view-enter,
