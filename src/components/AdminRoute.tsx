@@ -19,10 +19,15 @@ import {
   X,
   RefreshCw,
   Palette,
-  Sparkles
+  Move,
+  Maximize2,
+  Minimize2,
+  RotateCcw,
+  Save
 } from 'lucide-react';
-import { CatalogSection, SoundItem } from '../types/sound';
+import { CatalogSection, HeroFraming, SoundItem } from '../types/sound';
 import {
+  DEFAULT_HERO_FRAMING,
   deleteAudioBlob,
   getAdminSession,
   getAdminToken,
@@ -33,7 +38,6 @@ import {
   checkAdminSessionApi,
   saveAudioBlob,
   deleteItemApi,
-  clearDemoItemsApi,
   clearSectionApi,
   replaceItemFileApi,
   saveItemApi,
@@ -43,6 +47,7 @@ import {
   fetchAdminCatalogApi,
   fetchHeroImageApi,
   updateHeroImageApi,
+  updateHeroFramingApi,
   resetHeroImageApi
 } from '../utils/storage';
 import { getAudioContext, playBuffer, stopCurrentAudio, getAudioBufferForItem, decodeAudio } from '../utils/audioEngine';
@@ -51,12 +56,14 @@ interface AdminRouteProps {
   onBackToApp: () => void;
   onCatalogUpdated: () => void;
   onHeroImageUpdated?: (newUrl: string) => void;
+  onHeroFramingUpdated?: (framing: HeroFraming) => void;
 }
 
 export const AdminRoute: React.FC<AdminRouteProps> = ({
   onBackToApp,
   onCatalogUpdated,
-  onHeroImageUpdated
+  onHeroImageUpdated,
+  onHeroFramingUpdated
 }) => {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => getAdminSession());
   const [adminPassword, setAdminPassword] = useState('');
@@ -70,11 +77,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   // 3 Apartados del Panel de Administración requeridos: ONE SHOTS, BEATS, SAMPLES
   const [activeSection, setActiveSection] = useState<CatalogSection>('one_shots');
 
-  // Estados para PERSONALIZACIÓN DEL SITIO (IMAGEN DEL HERO)
-  const DEFAULT_HERO_IMAGE = '/src/assets/images/hero_sound_sculpture_1793944360196.jpg';
+  // Estados para PERSONALIZACIÓN DEL SITIO (IMAGEN Y ENCUADRE DEL HERO)
+  const DEFAULT_HERO_IMAGE = '/assets/aistudio/HERO_ca1bd082.jpg';
   const [currentHeroImage, setCurrentHeroImage] = useState<string>(DEFAULT_HERO_IMAGE);
   const [heroStoragePath, setHeroStoragePath] = useState<string | null>(null);
   const [heroUpdatedAt, setHeroUpdatedAt] = useState<string | null>(null);
+  const [heroFraming, setHeroFraming] = useState<HeroFraming>(DEFAULT_HERO_FRAMING);
+  const [draftHeroFraming, setDraftHeroFraming] = useState<HeroFraming>(DEFAULT_HERO_FRAMING);
+  const [isSavingFraming, setIsSavingFraming] = useState(false);
   const [selectedHeroFile, setSelectedHeroFile] = useState<File | null>(null);
   const [heroPreviewUrl, setHeroPreviewUrl] = useState<string>('');
   const [isHeroModalOpen, setIsHeroModalOpen] = useState(false);
@@ -82,6 +92,16 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   const [heroUpdateError, setHeroUpdateError] = useState<string>('');
   const [heroDimensions, setHeroDimensions] = useState<{ width: number; height: number } | null>(null);
   const heroFileInputRef = useRef<HTMLInputElement | null>(null);
+  const heroDragStateRef = useRef<{
+    active: boolean;
+    target: 'current' | 'modal';
+    startX: number;
+    startY: number;
+    initPosX: number;
+    initPosY: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   // Catálogo completo (incluye publicados y borradores privados)
   const [items, setItems] = useState<SoundItem[]>(getStoredCatalogItems());
@@ -160,11 +180,98 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       if (data.storagePath) {
         setHeroStoragePath(data.storagePath);
       }
+      if (data.heroFraming) {
+        setHeroFraming(data.heroFraming);
+      }
       if (data.updatedAt) {
         setHeroUpdatedAt(data.updatedAt);
       }
     });
   }, []);
+
+  // --- MÉTODOS DE ENCUADRE INTERACTIVO DEL HERO ---
+  function handleHeroPointerDown(
+    e: React.PointerEvent<HTMLDivElement>,
+    target: 'current' | 'modal'
+  ) {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const framing = target === 'current' ? heroFraming : draftHeroFraming;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    heroDragStateRef.current = {
+      active: true,
+      target,
+      startX: e.clientX,
+      startY: e.clientY,
+      initPosX: framing.posX,
+      initPosY: framing.posY,
+      width: Math.max(rect.width, 1),
+      height: Math.max(rect.height, 1)
+    };
+  }
+
+  function handleHeroPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const drag = heroDragStateRef.current;
+    if (!drag || !drag.active) return;
+
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    const clamp = (v: number) => Math.round(Math.min(100, Math.max(0, v)) * 10) / 10;
+
+    // Al arrastrar a la izquierda (dx < 0), revelamos más de la derecha (posX aumenta)
+    const nextX = clamp(drag.initPosX - (dx / drag.width) * 100);
+    const nextY = clamp(drag.initPosY - (dy / drag.height) * 100);
+
+    if (drag.target === 'current') {
+      setHeroFraming((prev) => ({ ...prev, posX: nextX, posY: nextY }));
+    } else {
+      setDraftHeroFraming((prev) => ({ ...prev, posX: nextX, posY: nextY }));
+    }
+  }
+
+  function handleHeroPointerEnd(e: React.PointerEvent<HTMLDivElement>) {
+    if (heroDragStateRef.current) {
+      heroDragStateRef.current.active = false;
+      heroDragStateRef.current = null;
+    }
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  async function handleSaveCurrentHeroFraming() {
+    setIsSavingFraming(true);
+    try {
+      const res = await updateHeroFramingApi(heroFraming);
+      if (!res.success || !res.heroFraming) {
+        throw new Error(res.error || 'Error al guardar el encuadre del HERO.');
+      }
+
+      setHeroFraming(res.heroFraming);
+      setHeroUpdatedAt(new Date().toISOString());
+
+      if (onHeroFramingUpdated) {
+        onHeroFramingUpdated(res.heroFraming);
+      }
+
+      setStatusFeedback({
+        type: 'success',
+        message: '¡Encuadre del HERO guardado y aplicado al sitio público!'
+      });
+    } catch (err: any) {
+      setStatusFeedback({
+        type: 'error',
+        message: err.message || 'No se pudo guardar el encuadre del HERO.'
+      });
+    } finally {
+      setIsSavingFraming(false);
+      setTimeout(() => setStatusFeedback(null), 4000);
+    }
+  }
 
   // --- MÉTODOS DE PERSONALIZACIÓN DEL SITIO (IMAGEN DEL HERO) ---
   function handleSelectHeroFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -193,6 +300,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     const preview = URL.createObjectURL(file);
     setSelectedHeroFile(file);
     setHeroPreviewUrl(preview);
+    setDraftHeroFraming({ ...DEFAULT_HERO_FRAMING });
 
     const img = new Image();
     img.onload = () => {
@@ -222,21 +330,26 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     setHeroUpdateError('');
 
     try {
-      const res = await updateHeroImageApi(selectedHeroFile);
+      const res = await updateHeroImageApi(selectedHeroFile, draftHeroFraming);
       if (!res.success || !res.heroImageUrl) {
         throw new Error(res.error || 'Error al procesar la subida de la imagen del HERO.');
       }
 
+      const appliedFraming = res.heroFraming || draftHeroFraming;
       setCurrentHeroImage(res.heroImageUrl);
+      setHeroFraming(appliedFraming);
       setHeroUpdatedAt(new Date().toISOString());
 
       if (onHeroImageUpdated) {
         onHeroImageUpdated(res.heroImageUrl);
       }
+      if (onHeroFramingUpdated) {
+        onHeroFramingUpdated(appliedFraming);
+      }
 
       setStatusFeedback({
         type: 'success',
-        message: '¡Imagen del HERO actualizada y confirmada con éxito!'
+        message: '¡Imagen y encuadre del HERO actualizados con éxito!'
       });
 
       handleCancelHeroChange();
@@ -258,10 +371,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
       setCurrentHeroImage(DEFAULT_HERO_IMAGE);
       setHeroStoragePath(null);
+      setHeroFraming({ ...DEFAULT_HERO_FRAMING });
       setHeroUpdatedAt(null);
 
       if (onHeroImageUpdated) {
         onHeroImageUpdated(DEFAULT_HERO_IMAGE);
+      }
+      if (onHeroFramingUpdated) {
+        onHeroFramingUpdated({ ...DEFAULT_HERO_FRAMING });
       }
 
       setStatusFeedback({
@@ -393,15 +510,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     setStatusFeedback(null);
 
     try {
+      const token = getAdminToken();
       let finalAudioUrl: string | undefined = undefined;
       let finalAudioStoragePath: string | undefined = undefined;
-      let finalCoverUrl: string = coverPreviewUrl || (
-        activeSection === 'one_shots'
-          ? '/src/assets/images/hero_sound_sculpture_1793944360196.jpg'
-          : activeSection === 'beats'
-          ? '/src/assets/images/pack_dark_matter_1793940336960.jpg'
-          : '/src/assets/images/pack_analog_drift_1793940338837.jpg'
-      );
+      let finalCoverUrl: string = DEFAULT_HERO_IMAGE;
 
       let durationSeconds = activeSection === 'one_shots' ? 0.8 : activeSection === 'beats' ? 5.0 : 4.0;
       let fileSizeStr = `${(selectedAudioFile.size / (1024 * 1024)).toFixed(1)} MB`;
@@ -416,7 +528,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       }
 
       // Subir al servidor persistente
-      const uploadRes = await uploadFileApi(selectedAudioFile, 'audio');
+      const uploadRes = await uploadFileApi(selectedAudioFile, 'audio', token || undefined);
       if (!uploadRes.success || (!uploadRes.url && !uploadRes.storagePath)) {
         throw new Error(uploadRes.error || 'Error al subir el archivo de audio al servidor.');
       }
@@ -428,12 +540,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       const tempId = `temp_${Date.now()}`;
       await saveAudioBlob(tempId, selectedAudioFile);
 
-      // 2. Si se adjuntó una portada opcional
+      // 2. Si se adjuntó una portada opcional, verificar persistencia real (nunca guardar blob:)
       if (selectedCoverFile) {
-        const coverUploadRes = await uploadFileApi(selectedCoverFile, 'cover');
-        if (coverUploadRes.success && coverUploadRes.url) {
-          finalCoverUrl = coverUploadRes.url;
+        const coverUploadRes = await uploadFileApi(selectedCoverFile, 'cover', token || undefined);
+        if (!coverUploadRes.success || !coverUploadRes.url || coverUploadRes.url.startsWith('blob:')) {
+          throw new Error(coverUploadRes.error || 'No se pudo guardar la portada seleccionada en el almacenamiento.');
         }
+        finalCoverUrl = coverUploadRes.url;
       }
 
       // 3. Crear el nuevo elemento en el catálogo
@@ -456,7 +569,6 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         description: description.trim()
       };
 
-      const token = getAdminToken();
       const res = await saveItemApi(newItemData, token || undefined);
 
       if (res.success && res.item) {
@@ -542,12 +654,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     setIsProcessing(true);
 
     try {
+      const token = getAdminToken();
       let finalCoverUrl = editingItem.coverImage;
       if (selectedCoverFile) {
-        const coverRes = await uploadFileApi(selectedCoverFile, 'cover');
-        if (coverRes.success && coverRes.url) {
-          finalCoverUrl = coverRes.url;
+        const coverRes = await uploadFileApi(selectedCoverFile, 'cover', token || undefined);
+        if (!coverRes.success || !coverRes.url || coverRes.url.startsWith('blob:')) {
+          throw new Error(coverRes.error || 'No se pudo subir la nueva portada. Se conservó la portada anterior.');
         }
+        finalCoverUrl = coverRes.url;
       }
 
       const patch: Partial<SoundItem> = {
@@ -559,13 +673,16 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         format: editingItem.format,
         isFree: editingItem.isFree,
         price: editingItem.isFree ? 0 : editingItem.price,
-        coverImage: finalCoverUrl,
+        ...(finalCoverUrl && !finalCoverUrl.startsWith('blob:') ? { coverImage: finalCoverUrl } : {}),
         isPublished: editingItem.isPublished
       };
 
-      await updateItemApi(editingItem.id, patch);
+      const updateRes = await updateItemApi(editingItem.id, patch, token || undefined);
+      if (!updateRes.success) {
+        throw new Error(updateRes.error || 'No se pudo guardar la edición en el servidor.');
+      }
 
-      const fresh = await fetchAdminCatalogApi();
+      const fresh = await fetchAdminCatalogApi(token || undefined);
       setItems(fresh);
       onCatalogUpdated();
       setEditingItem(null);
@@ -585,8 +702,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     const newStatus = !item.isPublished;
 
     try {
-      await togglePublishApi(item.id, newStatus);
-      const fresh = await fetchAdminCatalogApi();
+      const token = getAdminToken();
+      await togglePublishApi(item.id, newStatus, token || undefined);
+      const fresh = await fetchAdminCatalogApi(token || undefined);
       setItems(fresh);
       onCatalogUpdated();
 
@@ -615,10 +733,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     const targetTitle = itemToDelete.title;
 
     try {
-      await deleteItemApi(itemToDelete.id);
+      const token = getAdminToken();
+      await deleteItemApi(itemToDelete.id, token || undefined);
       await deleteAudioBlob(itemToDelete.id);
 
-      const fresh = await fetchAdminCatalogApi();
+      const fresh = await fetchAdminCatalogApi(token || undefined);
       setItems(fresh);
       onCatalogUpdated();
       getStorageUsage().then(setStorageUsage);
@@ -902,10 +1021,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </div>
               </div>
 
-              {/* Vista previa en vivo con estética idéntica al Hero público */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs font-mono text-zinc-400">
-                  <span>Vista Previa del HERO Público</span>
+              {/* Vista previa interactiva y editor de encuadre en vivo */}
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-zinc-400">
+                  <span className="flex items-center gap-2">
+                    <Move className="w-3.5 h-3.5 text-white" />
+                    <span>Vista Previa del HERO Público (arrastra la imagen para encuadrar)</span>
+                  </span>
                   {heroUpdatedAt && (
                     <span className="text-[11px] text-zinc-500">
                       Última actualización: {new Date(heroUpdatedAt).toLocaleString()}
@@ -913,33 +1035,156 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   )}
                 </div>
 
-                <div className="relative aspect-[16/7] md:aspect-[21/9] w-full rounded-2xl overflow-hidden border border-white/10 bg-black group shadow-2xl">
-                  {/* Imagen de fondo */}
+                <div
+                  onPointerDown={(e) => handleHeroPointerDown(e, 'current')}
+                  onPointerMove={handleHeroPointerMove}
+                  onPointerUp={handleHeroPointerEnd}
+                  onPointerCancel={handleHeroPointerEnd}
+                  className="relative aspect-[16/9] md:aspect-[16/8] w-full rounded-2xl overflow-hidden border border-white/15 bg-[#050505] shadow-2xl cursor-grab active:cursor-grabbing select-none touch-none"
+                >
+                  {/* Imagen de fondo ocupando TODO el HERO (detrás del título) */}
                   <img
                     src={currentHeroImage}
                     alt="Hero preview"
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02]"
+                    draggable={false}
+                    className="w-full h-full pointer-events-none"
+                    style={{
+                      objectFit: heroFraming.fit,
+                      objectPosition: `${heroFraming.posX}% ${heroFraming.posY}%`,
+                      transform: heroFraming.scale !== 1 ? `scale(${heroFraming.scale})` : undefined,
+                      transformOrigin: `${heroFraming.posX}% ${heroFraming.posY}%`
+                    }}
                   />
-                  {/* Gradiente y tratamiento visual idéntico al HERO público */}
+                  {/* Scrim sutil de legibilidad idéntico al HERO público */}
                   <div
                     className="absolute inset-0 pointer-events-none"
                     style={{
-                      background: 'radial-gradient(ellipse 60% 55% at 78% 40%, rgba(255,255,255,0.06), transparent 70%), linear-gradient(180deg, rgba(5,5,5,0.2) 0%, rgba(5,5,5,0.85) 100%)'
+                      background:
+                        'linear-gradient(90deg, rgba(5,5,5,0.42) 0%, rgba(5,5,5,0.18) 48%, rgba(5,5,5,0.06) 100%), linear-gradient(180deg, rgba(5,5,5,0.22) 0%, rgba(5,5,5,0.04) 45%, rgba(5,5,5,0.42) 100%)'
                     }}
                   />
 
-                  {/* Representación de los textos del Hero para verificar contraste */}
-                  <div className="absolute inset-0 p-6 md:p-8 flex flex-col justify-end pointer-events-none">
+                  {/* Representación de los textos del Hero sobre la imagen para verificar encuadre */}
+                  <div className="absolute inset-0 p-6 md:p-10 flex flex-col justify-center pointer-events-none">
                     <div className="max-w-md space-y-1">
-                      <span className="text-[10px] md:text-xs font-mono uppercase tracking-widest text-zinc-400 block">
+                      <span className="text-[10px] md:text-xs font-mono uppercase tracking-widest text-zinc-300 block">
                         El sonido de
                       </span>
-                      <h3 className="text-xl md:text-3xl font-black font-display tracking-tight text-white uppercase leading-none">
-                        ANOMALY <span className="text-zinc-400">SOUND</span>
+                      <h3 className="text-2xl md:text-4xl font-black font-display tracking-tight text-white uppercase leading-none">
+                        ANOMALY <span className="text-zinc-300 block">SOUND</span>
                       </h3>
-                      <p className="text-[11px] md:text-xs text-zinc-400 line-clamp-1 pt-1">
-                        Librerías WAV 24-bit · One Shots, Beats & Samples
+                      <p className="text-[11px] md:text-xs text-zinc-300 line-clamp-1 pt-2">
+                        Explorar catálogo · Ver beats y samples
                       </p>
+                    </div>
+                  </div>
+
+                  {/* Indicador flotante de coordenadas actuales */}
+                  <div className="absolute bottom-3 right-3 px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[10px] font-mono text-zinc-300 pointer-events-none">
+                    {heroFraming.fit === 'cover' ? 'Cover' : 'Completa'} · X: {heroFraming.posX}% · Y: {heroFraming.posY}% · {heroFraming.scale.toFixed(2)}x
+                  </div>
+                </div>
+
+                {/* Panel de Controles de Encuadre del HERO */}
+                <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-mono uppercase text-zinc-400 mr-1">Modo de Encuadre:</span>
+                      <button
+                        type="button"
+                        onClick={() => setHeroFraming((prev) => ({ ...prev, fit: 'cover' }))}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-1.5 border ${
+                          heroFraming.fit === 'cover'
+                            ? 'bg-white text-black border-white font-bold'
+                            : 'bg-white/[0.04] text-zinc-300 border-white/10 hover:bg-white/[0.08]'
+                        }`}
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span>Llenar todo el HERO</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHeroFraming((prev) => ({ ...prev, fit: 'contain', scale: 1, posX: 50, posY: 50 }))}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-1.5 border ${
+                          heroFraming.fit === 'contain'
+                            ? 'bg-white text-black border-white font-bold'
+                            : 'bg-white/[0.04] text-zinc-300 border-white/10 hover:bg-white/[0.08]'
+                        }`}
+                      >
+                        <Minimize2 className="w-3.5 h-3.5" />
+                        <span>Imagen completa (sin recorte)</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setHeroFraming({ ...DEFAULT_HERO_FRAMING })}
+                        className="px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5 transition-colors"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Centrar</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingFraming}
+                        onClick={handleSaveCurrentHeroFraming}
+                        className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        <span>{isSavingFraming ? 'Guardando...' : 'Guardar Encuadre'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Sliders de precisión X, Y y Zoom */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-white/[0.06]">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-[11px] font-mono text-zinc-400">
+                        <span>Posición Horizontal (X)</span>
+                        <span className="text-white">{heroFraming.posX}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                        value={heroFraming.posX}
+                        onChange={(e) => setHeroFraming((prev) => ({ ...prev, posX: Number(e.target.value) }))}
+                        className="w-full accent-white cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-[11px] font-mono text-zinc-400">
+                        <span>Posición Vertical (Y)</span>
+                        <span className="text-white">{heroFraming.posY}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                        value={heroFraming.posY}
+                        onChange={(e) => setHeroFraming((prev) => ({ ...prev, posY: Number(e.target.value) }))}
+                        className="w-full accent-white cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-[11px] font-mono text-zinc-400">
+                        <span>Zoom / Escala</span>
+                        <span className="text-white">{heroFraming.scale.toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={1}
+                        max={2.5}
+                        step={0.05}
+                        value={heroFraming.scale}
+                        onChange={(e) => setHeroFraming((prev) => ({ ...prev, scale: Number(e.target.value) }))}
+                        className="w-full accent-white cursor-pointer"
+                      />
                     </div>
                   </div>
                 </div>
@@ -1347,7 +1592,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                       {/* Portada */}
                       <div className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black">
                         <img
-                          src={item.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg'}
+                          src={item.coverImage || DEFAULT_HERO_IMAGE}
                           alt={item.title}
                           className="w-full h-full object-cover"
                         />
@@ -1488,17 +1733,17 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     className="hidden"
   />
 
-  {/* MODAL DE CONFIRMACIÓN PARA CAMBIAR IMAGEN DEL HERO */}
+  {/* MODAL DE CONFIRMACIÓN Y ENCUADRE PARA CAMBIAR IMAGEN DEL HERO */}
   {isHeroModalOpen && (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-xl p-6 md:p-8 rounded-2xl bg-[#09090b] border border-white/15 shadow-2xl space-y-5 relative">
+      <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6 md:p-8 rounded-2xl bg-[#09090b] border border-white/15 shadow-2xl space-y-5 relative">
         <div className="flex items-center justify-between border-b border-white/10 pb-4">
           <div className="flex items-center gap-2.5">
             <span className="p-2 rounded-lg bg-white/10 text-white">
               <ImageIcon className="w-4 h-4" />
             </span>
             <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
-              Confirmar Cambio de Imagen del HERO
+              Encuadrar y Confirmar Imagen del HERO
             </h3>
           </div>
           <button
@@ -1511,24 +1756,138 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
           </button>
         </div>
 
-        {/* Comparativa visual: Actual vs. Nueva */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 block">
-              Imagen Actual
+        {/* Editor interactivo de encuadre de la nueva imagen */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-[11px] font-mono">
+            <span className="text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
+              <Move className="w-3.5 h-3.5" />
+              Arrastra la nueva imagen para encuadrarla detrás del título
             </span>
-            <div className="aspect-[16/10] rounded-xl overflow-hidden border border-white/10 bg-black relative">
-              <img src={currentHeroImage} alt="Current hero" className="w-full h-full object-cover" />
+            <span className="text-zinc-400">
+              X: {draftHeroFraming.posX}% · Y: {draftHeroFraming.posY}% · {draftHeroFraming.scale.toFixed(2)}x
+            </span>
+          </div>
+
+          <div
+            onPointerDown={(e) => handleHeroPointerDown(e, 'modal')}
+            onPointerMove={handleHeroPointerMove}
+            onPointerUp={handleHeroPointerEnd}
+            onPointerCancel={handleHeroPointerEnd}
+            className="relative aspect-[16/9] w-full rounded-xl overflow-hidden border border-emerald-500/40 bg-[#050505] shadow-lg shadow-emerald-950/20 cursor-grab active:cursor-grabbing select-none touch-none"
+          >
+            <img
+              src={heroPreviewUrl}
+              alt="New hero preview"
+              draggable={false}
+              className="w-full h-full pointer-events-none"
+              style={{
+                objectFit: draftHeroFraming.fit,
+                objectPosition: `${draftHeroFraming.posX}% ${draftHeroFraming.posY}%`,
+                transform: draftHeroFraming.scale !== 1 ? `scale(${draftHeroFraming.scale})` : undefined,
+                transformOrigin: `${draftHeroFraming.posX}% ${draftHeroFraming.posY}%`
+              }}
+            />
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background:
+                  'linear-gradient(90deg, rgba(5,5,5,0.42) 0%, rgba(5,5,5,0.18) 48%, rgba(5,5,5,0.06) 100%), linear-gradient(180deg, rgba(5,5,5,0.22) 0%, rgba(5,5,5,0.04) 45%, rgba(5,5,5,0.42) 100%)'
+              }}
+            />
+            <div className="absolute inset-0 p-5 md:p-7 flex flex-col justify-center pointer-events-none">
+              <div className="max-w-xs space-y-0.5">
+                <span className="text-[9px] font-mono uppercase tracking-widest text-zinc-300 block">
+                  El sonido de
+                </span>
+                <span className="text-lg md:text-2xl font-black font-display tracking-tight text-white uppercase leading-none block">
+                  ANOMALY <span className="text-zinc-300 block">SOUND</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 block flex items-center gap-1.5">
-              <CheckCircle2 className="w-3 h-3" />
-              Nueva Selección
-            </span>
-            <div className="aspect-[16/10] rounded-xl overflow-hidden border border-emerald-500/40 bg-black relative shadow-lg shadow-emerald-950/20">
-              <img src={heroPreviewUrl} alt="New hero preview" className="w-full h-full object-cover" />
+          {/* Controles rápidos de encuadre en el modal */}
+          <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDraftHeroFraming((prev) => ({ ...prev, fit: 'cover' }))}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors ${
+                    draftHeroFraming.fit === 'cover'
+                      ? 'bg-white text-black border-white font-bold'
+                      : 'bg-white/[0.04] text-zinc-300 border-white/10'
+                  }`}
+                >
+                  Llenar HERO (Cover)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraftHeroFraming((prev) => ({ ...prev, fit: 'contain', scale: 1, posX: 50, posY: 50 }))}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors ${
+                    draftHeroFraming.fit === 'contain'
+                      ? 'bg-white text-black border-white font-bold'
+                      : 'bg-white/[0.04] text-zinc-300 border-white/10'
+                  }`}
+                >
+                  Imagen Completa (Sin Recorte)
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDraftHeroFraming({ ...DEFAULT_HERO_FRAMING })}
+                className="px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-300 text-[11px] font-mono"
+              >
+                Centrar
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
+                  <span>Horizontal (X)</span>
+                  <span>{draftHeroFraming.posX}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={draftHeroFraming.posX}
+                  onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, posX: Number(e.target.value) }))}
+                  className="w-full accent-white cursor-pointer"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
+                  <span>Vertical (Y)</span>
+                  <span>{draftHeroFraming.posY}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={draftHeroFraming.posY}
+                  onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, posY: Number(e.target.value) }))}
+                  className="w-full accent-white cursor-pointer"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
+                  <span>Zoom</span>
+                  <span>{draftHeroFraming.scale.toFixed(2)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={2.5}
+                  step={0.05}
+                  value={draftHeroFraming.scale}
+                  onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, scale: Number(e.target.value) }))}
+                  className="w-full accent-white cursor-pointer"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -1562,7 +1921,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         )}
 
         <p className="text-xs text-zinc-400 leading-relaxed">
-          Al confirmar, la imagen se subirá a Supabase Storage y se aplicará permanentemente al HERO público. La imagen anterior se conservará intacta hasta que el almacenamiento confirme la recepción.
+          Al confirmar, la imagen y el encuadre seleccionado se guardarán permanentemente en el HERO público. La imagen anterior se conservará intacta hasta confirmar la subida.
         </p>
 
         <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
@@ -1934,7 +2293,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black">
                 <img
-                  src={itemToDelete.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg'}
+                  src={itemToDelete.coverImage || '/assets/aistudio/HERO_ca1bd082.jpg'}
                   alt={itemToDelete.title}
                   className="w-full h-full object-cover"
                 />

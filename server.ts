@@ -86,7 +86,7 @@ if (!ADMIN_SECRET) {
 }
 
 if (!ADMIN_PASSWORD) {
-  console.warn('[SEGURIDAD] Advertencia: ADMIN_PASSWORD no está definido en variables de entorno (usando clave por defecto).');
+  console.warn('[SEGURIDAD] Advertencia: ADMIN_PASSWORD no está definido en variables de entorno. El acceso administrativo permanecerá deshabilitado hasta configurarlo.');
 }
 // WhatsApp Business Configuration
 const WHATSAPP_NUMBER = process.env.WHATSAPP_NUMBER || process.env.VITE_WHATSAPP_NUMBER || '';
@@ -364,15 +364,50 @@ function readLocalDatabase(): SoundItemDb[] {
 
 function writeLocalDatabase(items: SoundItemDb[]) {
   try {
-    fs.writeFileSync(CATALOG_DB_PATH, JSON.stringify(items, null, 2), 'utf-8');
+    const tmpPath = `${CATALOG_DB_PATH}.tmp.${process.pid}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(items, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, CATALOG_DB_PATH);
   } catch (err) {
     console.error('Error saving to local catalog DB:', err);
   }
 }
 
+export interface HeroFraming {
+  fit: 'cover' | 'contain';
+  posX: number;
+  posY: number;
+  scale: number;
+}
+
+export const DEFAULT_HERO_FRAMING: HeroFraming = {
+  fit: 'cover',
+  posX: 50,
+  posY: 50,
+  scale: 1
+};
+
+export function normalizeHeroFraming(raw?: any): HeroFraming {
+  if (!raw || typeof raw !== 'object') {
+    return { ...DEFAULT_HERO_FRAMING };
+  }
+  const fit: 'cover' | 'contain' = raw.fit === 'contain' ? 'contain' : 'cover';
+  const clamp = (val: unknown, min: number, max: number, fallback: number) => {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  };
+  return {
+    fit,
+    posX: Math.round(clamp(raw.posX, 0, 100, 50) * 10) / 10,
+    posY: Math.round(clamp(raw.posY, 0, 100, 50) * 10) / 10,
+    scale: Math.round(clamp(raw.scale, 1, 2.5, 1) * 100) / 100
+  };
+}
+
 export interface SiteConfig {
   heroImageUrl?: string;
   heroImageStoragePath?: string;
+  heroFraming?: HeroFraming;
   updatedAt?: string;
 }
 
@@ -382,6 +417,7 @@ function readLocalSiteConfig(): SiteConfig {
       const initial: SiteConfig = {
         heroImageUrl: '',
         heroImageStoragePath: '',
+        heroFraming: { ...DEFAULT_HERO_FRAMING },
         updatedAt: new Date().toISOString()
       };
       fs.writeFileSync(SITE_CONFIG_PATH, JSON.stringify(initial, null, 2), 'utf-8');
@@ -389,16 +425,28 @@ function readLocalSiteConfig(): SiteConfig {
     }
     const raw = fs.readFileSync(SITE_CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    if (parsed && typeof parsed === 'object') {
+      return {
+        ...parsed,
+        heroFraming: normalizeHeroFraming(parsed.heroFraming)
+      };
+    }
+    return { heroFraming: { ...DEFAULT_HERO_FRAMING } };
   } catch (err) {
     console.error('Error reading site config:', err);
-    return {};
+    return { heroFraming: { ...DEFAULT_HERO_FRAMING } };
   }
 }
 
 function writeLocalSiteConfig(config: SiteConfig): boolean {
   try {
-    fs.writeFileSync(SITE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+    const normalized: SiteConfig = {
+      ...config,
+      heroFraming: normalizeHeroFraming(config.heroFraming)
+    };
+    const tmpPath = `${SITE_CONFIG_PATH}.tmp.${process.pid}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(normalized, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, SITE_CONFIG_PATH);
     return true;
   } catch (err) {
     console.error('Error saving site config:', err);
@@ -414,26 +462,38 @@ async function getEffectiveSiteConfig(): Promise<SiteConfig> {
       if (remoteVal) {
         const parsed = JSON.parse(remoteVal);
         if (parsed && typeof parsed === 'object') {
-          config = { ...config, ...parsed };
+          config = {
+            ...config,
+            ...parsed,
+            heroFraming: normalizeHeroFraming(parsed.heroFraming || config.heroFraming)
+          };
         }
       }
     } catch {
       // Fallback a config local
     }
   }
+  config.heroFraming = normalizeHeroFraming(config.heroFraming);
   return config;
 }
 
 async function saveEffectiveSiteConfig(config: SiteConfig): Promise<boolean> {
-  writeLocalSiteConfig(config);
+  const normalized: SiteConfig = {
+    ...config,
+    heroFraming: normalizeHeroFraming(config.heroFraming)
+  };
+  const localOk = writeLocalSiteConfig(normalized);
   if (isSupabaseConfigured()) {
     try {
-      await setSiteSettingInSupabase('hero_image_config', JSON.stringify(config));
+      const ok = await setSiteSettingInSupabase('hero_image_config', JSON.stringify(normalized));
+      if (!ok) {
+        console.warn('Aviso al persistir hero_image_config en Supabase.');
+      }
     } catch (err) {
       console.warn('Aviso al persistir hero_image_config en Supabase:', err);
     }
   }
-  return true;
+  return localOk;
 }
 
 async function startServer() {
@@ -556,41 +616,6 @@ async function startServer() {
     if (declaredFormat && declaredFormat.toLowerCase().includes('aiff')) return 'AIFF 24-bit';
     if (declaredFormat && declaredFormat.toLowerCase().includes('zip')) return 'ZIP Archive';
     return declaredFormat || 'WAV 24-bit';
-  }
-
-  function createBasicWavBuffer(durationSeconds = 2.0, freq = 220): Buffer {
-    const sampleRate = 44100;
-    const numChannels = 2;
-    const bytesPerSample = 2;
-    const totalSamples = Math.floor(sampleRate * durationSeconds);
-    const dataSize = totalSamples * numChannels * bytesPerSample;
-    const buffer = Buffer.alloc(44 + dataSize);
-
-    buffer.write('RIFF', 0);
-    buffer.writeUInt32LE(36 + dataSize, 4);
-    buffer.write('WAVE', 8);
-    buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16);
-    buffer.writeUInt16LE(1, 20);
-    buffer.writeUInt16LE(numChannels, 22);
-    buffer.writeUInt32LE(sampleRate, 24);
-    buffer.writeUInt32LE(sampleRate * numChannels * bytesPerSample, 28);
-    buffer.writeUInt16LE(numChannels * bytesPerSample, 32);
-    buffer.writeUInt16LE(16, 34);
-    buffer.write('data', 36);
-    buffer.writeUInt32LE(dataSize, 40);
-
-    let offset = 44;
-    for (let i = 0; i < totalSamples; i++) {
-      const t = i / sampleRate;
-      const env = Math.exp(-t * 2.0);
-      const sampleVal = Math.sin(2 * Math.PI * freq * t) * env * 0.75;
-      const intVal = Math.floor(sampleVal * 32767);
-      buffer.writeInt16LE(intVal, offset);
-      buffer.writeInt16LE(intVal, offset + 2);
-      offset += 4;
-    }
-    return buffer;
   }
 
   async function validateMasterInStorage(storagePath: string): Promise<{ valid: boolean; error?: string }> {
@@ -950,8 +975,36 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Serve uploaded files statically with authentic audio MIME types and range requests
-  app.use('/uploads/audio', express.static(AUDIO_UPLOADS_DIR, {
+  // Serve uploaded audio files only when tied to a published item or requested by an authenticated admin
+  app.use('/uploads/audio', async (req: Request, res: Response, next: NextFunction) => {
+    const requestedName = path.basename(req.path || '');
+    if (!requestedName || requestedName === '.' || requestedName === '..') {
+      return res.status(400).json({ error: 'Nombre de archivo no válido.' });
+    }
+
+    const cookies = parseCookies(req.headers.cookie);
+    let reqToken = cookies['anomaly_admin_session'];
+    if (!reqToken && req.headers.authorization?.startsWith('Bearer ')) {
+      reqToken = req.headers.authorization.split(' ')[1];
+    }
+    const isAdminCaller = reqToken ? (await verifyAdminSessionToken(reqToken)).valid : false;
+    if (isAdminCaller) {
+      return next();
+    }
+
+    const localItems = readLocalDatabase();
+    const matched = localItems.find((it) => {
+      const urlMatch = it.audioUrl && path.basename(it.audioUrl) === requestedName;
+      const pathMatch = it.audioStoragePath && path.basename(it.audioStoragePath) === requestedName;
+      return (urlMatch || pathMatch) && it.isPublished !== false;
+    });
+
+    if (!matched) {
+      return res.status(403).json({ error: 'Acceso restringido al archivo de audio.' });
+    }
+
+    return next();
+  }, express.static(AUDIO_UPLOADS_DIR, {
     setHeaders: (res, filePath) => {
       const ext = path.extname(filePath).toLowerCase();
       if (ext === '.wav') res.setHeader('Content-Type', 'audio/wav');
@@ -977,6 +1030,14 @@ async function startServer() {
         return res.status(400).json({ error: 'ID de audio requerido.' });
       }
 
+      // Verificar si el solicitante tiene sesión administrativa válida (para preescuchar borradores)
+      const cookies = parseCookies(req.headers.cookie);
+      let reqToken = cookies['anomaly_admin_session'];
+      if (!reqToken && req.headers.authorization?.startsWith('Bearer ')) {
+        reqToken = req.headers.authorization.split(' ')[1];
+      }
+      const isAdminCaller = reqToken ? (await verifyAdminSessionToken(reqToken)).valid : false;
+
       // 1. Buscar en catálogo Supabase o local
       let item: any = null;
       if (isSupabaseConfigured()) {
@@ -986,17 +1047,22 @@ async function startServer() {
       }
       if (!item) {
         const localItems = readLocalDatabase();
-        item = localItems.find((it) => it.id === rawId || it.audioUrl?.includes(rawId) || it.audioStoragePath?.includes(rawId));
+        item = localItems.find((it) => it.id === rawId || it.audioUrl?.includes(rawId));
       }
 
       // 2. Si se localizó el producto en la base de datos:
       if (item) {
+        const isPublished = item.is_published !== undefined ? Boolean(item.is_published) : (item.isPublished !== false);
+        if (!isPublished && !isAdminCaller) {
+          return res.status(403).json({ error: 'Este elemento no está publicado.' });
+        }
+
         const storagePath = item.audio_storage_path || item.audioStoragePath;
         const audioUrl = item.audio_url || item.audioUrl;
 
         // A) Almacenado en Supabase Storage privado
         if (storagePath && isSupabaseConfigured()) {
-          const signedUrl = await createSignedAudioUrl(storagePath, 3600);
+          const signedUrl = await createSignedAudioUrl(storagePath, 1800);
           if (signedUrl) {
             return res.redirect(signedUrl);
           }
@@ -1024,26 +1090,13 @@ async function startServer() {
         }
       }
 
-      // 3. Si rawId no es un ID de item, comprobar si es directamente un path/filename en Supabase Storage:
-      if (isSupabaseConfigured()) {
+      // 3. Acceso directo a ruta en storage solo para administradores autenticados
+      if (isAdminCaller && isSupabaseConfigured()) {
         const potentialSupabasePath = rawId.startsWith('masters/') ? rawId : `masters/${path.basename(rawId)}`;
-        const signedUrl = await createSignedAudioUrl(potentialSupabasePath, 3600);
+        const signedUrl = await createSignedAudioUrl(potentialSupabasePath, 1800);
         if (signedUrl) {
           return res.redirect(signedUrl);
         }
-      }
-
-      // 4. Comprobar si rawId es directamente un archivo físico local en AUDIO_UPLOADS_DIR:
-      const directLocalPath = path.join(AUDIO_UPLOADS_DIR, path.basename(rawId));
-      if (fs.existsSync(directLocalPath) && fs.statSync(directLocalPath).isFile()) {
-        const ext = path.extname(directLocalPath).toLowerCase();
-        const contentType = ext === '.mp3' ? 'audio/mpeg'
-          : (ext === '.aiff' || ext === '.aif') ? 'audio/aiff'
-          : ext === '.wav' ? 'audio/wav'
-          : 'application/octet-stream';
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Accept-Ranges', 'bytes');
-        return res.sendFile(directLocalPath);
       }
 
       return res.status(404).json({
@@ -1060,19 +1113,19 @@ async function startServer() {
   // POST /api/admin/login with Rate Limiting protection against brute-force attacks
   app.post('/api/admin/login', async (req: Request, res: Response) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    if (req.headers['x-test-reset-rate-limit'] === 'anomaly_test_reset') {
-      await clearLoginAttempts(ip);
-      await clearLoginAttempts('::1');
-      await clearLoginAttempts('127.0.0.1');
-      await clearLoginAttempts('::ffff:127.0.0.1');
-      await clearLoginAttempts('unknown');
-    }
     const rateCheck = await checkLoginRateLimit(ip);
 
     if (!rateCheck.allowed) {
       return res.status(429).json({
         success: false,
         error: `Demasiados intentos fallidos consecutivos. Acceso bloqueado temporalmente por seguridad. Inténtalo de nuevo en ${rateCheck.remainingSeconds || 900} segundos.`
+      });
+    }
+
+    if (isProduction && (!ADMIN_PASSWORD || !process.env.ADMIN_SECRET)) {
+      return res.status(503).json({
+        success: false,
+        error: 'Configuración de seguridad incompleta en el servidor (ADMIN_PASSWORD / ADMIN_SECRET requeridos en producción).'
       });
     }
 
@@ -1086,16 +1139,23 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'La contraseña administrativa es obligatoria.' });
     }
 
-    const effectiveAdminPassword = ADMIN_PASSWORD || 'anomaly2026';
+    if (!ADMIN_PASSWORD) {
+      return res.status(503).json({
+        success: false,
+        error: 'Contraseña administrativa no configurada en las variables de entorno del servidor (ADMIN_PASSWORD).'
+      });
+    }
 
-    // Validación segura de correo y contraseña con protección contra timing attacks
+    // Validación segura de correo y contraseña con hashes de longitud fija y timingSafeEqual
     const cleanEmail = email.trim().toLowerCase();
     const expectedEmail = (ADMIN_EMAIL || 'admin@anomalysound.com').trim().toLowerCase();
-    const isEmailValid = cleanEmail === expectedEmail || cleanEmail === 'admin@anomalysound.com';
+    const emailHash = crypto.createHash('sha256').update(cleanEmail).digest();
+    const expectedEmailHash = crypto.createHash('sha256').update(expectedEmail).digest();
+    const isEmailValid = crypto.timingSafeEqual(emailHash, expectedEmailHash);
 
-    const passBuf = Buffer.from(password);
-    const expectedPassBuf = Buffer.from(effectiveAdminPassword);
-    const isPassValid = (passBuf.length === expectedPassBuf.length && crypto.timingSafeEqual(passBuf, expectedPassBuf)) || password === 'anomaly2026';
+    const passHash = crypto.createHash('sha256').update(password).digest();
+    const expectedPassHash = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
+    const isPassValid = crypto.timingSafeEqual(passHash, expectedPassHash);
 
     if (isPassValid && isEmailValid) {
       await clearLoginAttempts(ip);
@@ -1190,8 +1250,7 @@ async function startServer() {
           format: it.format,
           fileSize: it.file_size,
           coverImage: it.cover_image,
-          audioUrl: it.audio_url,
-          audioStoragePath: it.audio_storage_path,
+          audioUrl: `/api/audio/stream/${encodeURIComponent(it.id)}`,
           syntheticType: it.synthetic_type,
           isFree: it.is_free,
           price: it.price,
@@ -1209,7 +1268,12 @@ async function startServer() {
 
     // Modo local cuando Supabase no está configurado o no responde
     const items = readLocalDatabase();
-    const publishedOnly = items.filter((it) => it.isPublished !== false);
+    const publishedOnly = items
+      .filter((it) => it.isPublished !== false)
+      .map(({ audioStoragePath, ...publicItem }) => ({
+        ...publicItem,
+        audioUrl: publicItem.audioUrl || `/api/audio/stream/${encodeURIComponent(publicItem.id)}`
+      }));
     return res.json(publishedOnly);
   });
 
@@ -1271,6 +1335,13 @@ async function startServer() {
         itemData.format
       );
 
+      const cleanCoverImage = (itemData.coverImage && typeof itemData.coverImage === 'string' && !itemData.coverImage.startsWith('blob:'))
+        ? itemData.coverImage.trim()
+        : '/assets/aistudio/HERO_ca1bd082.jpg';
+      const cleanAudioUrl = (itemData.audioUrl && typeof itemData.audioUrl === 'string' && !itemData.audioUrl.startsWith('blob:'))
+        ? itemData.audioUrl.trim()
+        : null;
+
       const newItemPayload = {
         id: itemId,
         section,
@@ -1281,8 +1352,8 @@ async function startServer() {
         duration: itemData.duration || (section === 'one_shots' ? 0.8 : section === 'beats' ? 5.0 : 4.0),
         format: resolvedFormat,
         file_size: itemData.fileSize || '12 MB',
-        cover_image: itemData.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg',
-        audio_url: itemData.audioUrl || null,
+        cover_image: cleanCoverImage,
+        audio_url: cleanAudioUrl,
         audio_storage_path: (itemData as any).storagePath || itemData.audioStoragePath || null,
         synthetic_type: itemData.syntheticType || null,
         is_free: isFree,
@@ -1392,29 +1463,39 @@ async function startServer() {
       const { id } = req.params;
       const patch = req.body;
 
+      const safePatchCover = (typeof patch.coverImage === 'string' && patch.coverImage.trim() && !patch.coverImage.startsWith('blob:'))
+        ? patch.coverImage.trim()
+        : undefined;
+      const safePatchAudio = (typeof patch.audioUrl === 'string' && patch.audioUrl.trim() && !patch.audioUrl.startsWith('blob:'))
+        ? patch.audioUrl.trim()
+        : undefined;
+
       if (isSupabaseConfigured()) {
         const existing = await getSoundItemByIdFromSupabase(id);
         if (!existing) {
           return res.status(404).json({ error: 'Sonido no encontrado en Supabase.' });
         }
 
+        const isFreeVal = patch.isFree !== undefined ? Boolean(patch.isFree) : existing.is_free;
+        const priceVal = isFreeVal ? 0 : (patch.price !== undefined ? Number(patch.price) : existing.price);
+
         const updated = await upsertSoundItemInSupabase({
           id,
           section: patch.section || existing.section,
-          title: patch.title ? patch.title.toUpperCase() : existing.title,
+          title: (typeof patch.title === 'string' && patch.title.trim()) ? patch.title.trim().toUpperCase() : existing.title,
           category: patch.category !== undefined ? patch.category : existing.category,
           bpm: patch.bpm !== undefined ? patch.bpm : existing.bpm,
           key: patch.key !== undefined ? patch.key : existing.key,
           duration: patch.duration !== undefined ? patch.duration : existing.duration,
           format: patch.format !== undefined ? patch.format : existing.format,
-          file_size: patch.fileSize !== undefined ? patch.fileSize : existing.file_size,
-          cover_image: patch.coverImage !== undefined ? patch.coverImage : existing.cover_image,
-          audio_url: patch.audioUrl !== undefined ? patch.audioUrl : existing.audio_url,
-          audio_storage_path: patch.audioStoragePath !== undefined ? patch.audioStoragePath : existing.audio_storage_path,
+          file_size: (typeof patch.fileSize === 'string' && patch.fileSize.trim()) ? patch.fileSize : existing.file_size,
+          cover_image: safePatchCover !== undefined ? safePatchCover : existing.cover_image,
+          audio_url: safePatchAudio !== undefined ? safePatchAudio : existing.audio_url,
+          audio_storage_path: (typeof patch.audioStoragePath === 'string' && patch.audioStoragePath.trim()) ? patch.audioStoragePath : existing.audio_storage_path,
           synthetic_type: patch.syntheticType !== undefined ? patch.syntheticType : existing.synthetic_type,
-          is_free: patch.isFree !== undefined ? patch.isFree : existing.is_free,
-          price: patch.price !== undefined ? patch.price : existing.price,
-          is_published: patch.isPublished !== undefined ? patch.isPublished : existing.is_published,
+          is_free: isFreeVal,
+          price: priceVal,
+          is_published: patch.isPublished !== undefined ? Boolean(patch.isPublished) : existing.is_published,
           downloads: existing.downloads || 0,
           description: patch.description !== undefined ? patch.description : existing.description
         });
@@ -1434,15 +1515,28 @@ async function startServer() {
       const price = isFree ? 0 : (patch.price !== undefined ? Number(patch.price) : existingItem.price);
       const format = patch.format !== undefined
         ? patch.format
-        : (patch.audioUrl ? detectAudioFormat(patch.audioUrl, existingItem.format) : existingItem.format);
+        : (safePatchAudio ? detectAudioFormat(safePatchAudio, existingItem.format) : existingItem.format);
 
-      const updatedItem = {
+      const updatedItem: SoundItemDb = {
         ...existingItem,
-        ...patch,
-        title: patch.title ? patch.title.toUpperCase() : existingItem.title,
+        section: patch.section || existingItem.section,
+        title: (typeof patch.title === 'string' && patch.title.trim()) ? patch.title.trim().toUpperCase() : existingItem.title,
+        category: patch.category !== undefined ? patch.category : existingItem.category,
+        bpm: patch.bpm !== undefined ? patch.bpm : existingItem.bpm,
+        key: patch.key !== undefined ? patch.key : existingItem.key,
+        duration: patch.duration !== undefined ? patch.duration : existingItem.duration,
         format,
+        fileSize: (typeof patch.fileSize === 'string' && patch.fileSize.trim()) ? patch.fileSize : existingItem.fileSize,
+        coverImage: safePatchCover !== undefined ? safePatchCover : existingItem.coverImage,
+        audioUrl: safePatchAudio !== undefined ? safePatchAudio : existingItem.audioUrl,
+        audioStoragePath: (typeof patch.audioStoragePath === 'string' && patch.audioStoragePath.trim()) ? patch.audioStoragePath : existingItem.audioStoragePath,
+        syntheticType: patch.syntheticType !== undefined ? patch.syntheticType : existingItem.syntheticType,
         isFree,
         price,
+        isPublished: patch.isPublished !== undefined ? Boolean(patch.isPublished) : existingItem.isPublished,
+        description: patch.description !== undefined ? patch.description : existingItem.description,
+        downloads: existingItem.downloads || 0,
+        createdAt: existingItem.createdAt,
         updatedAt: new Date().toISOString()
       };
       items[index] = updatedItem;
@@ -1517,18 +1611,25 @@ async function startServer() {
       }
 
       if (target.audioUrl && target.audioUrl.startsWith('/uploads/audio/')) {
-        const localFileName = path.basename(target.audioUrl);
-        const fullAudioPath = path.join(AUDIO_UPLOADS_DIR, localFileName);
-        if (fs.existsSync(fullAudioPath)) {
-          try { fs.unlinkSync(fullAudioPath); } catch {}
+        const audioStillUsed = items.some((it) => it.id !== id && it.audioUrl === target.audioUrl);
+        if (!audioStillUsed) {
+          const localFileName = path.basename(target.audioUrl);
+          const fullAudioPath = path.join(AUDIO_UPLOADS_DIR, localFileName);
+          if (fs.existsSync(fullAudioPath)) {
+            try { fs.unlinkSync(fullAudioPath); } catch {}
+          }
         }
       }
 
       if (target.coverImage && target.coverImage.startsWith('/uploads/covers/')) {
-        const localCoverName = path.basename(target.coverImage);
-        const fullCoverPath = path.join(COVERS_UPLOADS_DIR, localCoverName);
-        if (fs.existsSync(fullCoverPath)) {
-          try { fs.unlinkSync(fullCoverPath); } catch {}
+        const siteCfg = await getEffectiveSiteConfig();
+        const coverStillUsed = items.some((it) => it.id !== id && it.coverImage === target.coverImage) || siteCfg.heroImageUrl === target.coverImage;
+        if (!coverStillUsed) {
+          const localCoverName = path.basename(target.coverImage);
+          const fullCoverPath = path.join(COVERS_UPLOADS_DIR, localCoverName);
+          if (fs.existsSync(fullCoverPath)) {
+            try { fs.unlinkSync(fullCoverPath); } catch {}
+          }
         }
       }
 
@@ -1572,14 +1673,21 @@ async function startServer() {
           if (duration) patch.duration = duration;
 
           const updated = await upsertSoundItemInSupabase(patch);
+          if (!updated) {
+            return res.status(500).json({ error: 'No se pudo confirmar la actualización del master en Supabase.' });
+          }
 
           if (oldStoragePath && oldStoragePath !== storagePath) {
-            const supabase = getSupabaseServerClient();
-            if (supabase) {
-              try {
-                await supabase.storage.from('anomaly-audio-masters').remove([oldStoragePath]);
-              } catch (e) {
-                console.warn('Advertencia al limpiar master anterior:', e);
+            const allItems = await getSoundItemsFromSupabase(true);
+            const stillReferenced = allItems.some((it) => it.id !== id && it.audio_storage_path === oldStoragePath);
+            if (!stillReferenced) {
+              const supabase = getSupabaseServerClient();
+              if (supabase) {
+                try {
+                  await supabase.storage.from('anomaly-audio-masters').remove([oldStoragePath]);
+                } catch (e) {
+                  console.warn('Advertencia al limpiar master anterior:', e);
+                }
               }
             }
           }
@@ -1596,8 +1704,23 @@ async function startServer() {
             message: 'Audio master reemplazado exitosamente.'
           });
         } else if (kind === 'cover') {
+          const oldCover = existing.cover_image;
           patch.cover_image = url || storagePath;
           const updated = await upsertSoundItemInSupabase(patch);
+          if (!updated) {
+            return res.status(500).json({ error: 'No se pudo confirmar la actualización de carátula en Supabase.' });
+          }
+
+          if (oldCover && oldCover !== patch.cover_image && oldCover.includes('/storage/v1/object/public/anomaly-covers/')) {
+            const allItems = await getSoundItemsFromSupabase(true);
+            const siteCfg = await getEffectiveSiteConfig();
+            const stillReferenced = allItems.some((it) => it.id !== id && it.cover_image === oldCover) || siteCfg.heroImageUrl === oldCover;
+            if (!stillReferenced) {
+              const relPath = oldCover.split('/storage/v1/object/public/anomaly-covers/')[1];
+              if (relPath) await deleteFileFromStorage('anomaly-covers', relPath);
+            }
+          }
+
           return res.json({
             success: true,
             item: {
@@ -1627,8 +1750,11 @@ async function startServer() {
         item.updatedAt = new Date().toISOString();
 
         if (oldAudioUrl && oldAudioUrl.startsWith('/uploads/audio/') && oldAudioUrl !== url) {
-          const oldPath = path.join(AUDIO_UPLOADS_DIR, path.basename(oldAudioUrl));
-          if (fs.existsSync(oldPath)) try { fs.unlinkSync(oldPath); } catch {}
+          const stillUsed = items.some((it) => it.id !== id && it.audioUrl === oldAudioUrl);
+          if (!stillUsed) {
+            const oldPath = path.join(AUDIO_UPLOADS_DIR, path.basename(oldAudioUrl));
+            if (fs.existsSync(oldPath)) try { fs.unlinkSync(oldPath); } catch {}
+          }
         }
       } else if (kind === 'cover') {
         const oldCover = item.coverImage;
@@ -1636,8 +1762,12 @@ async function startServer() {
         item.updatedAt = new Date().toISOString();
 
         if (oldCover && oldCover.startsWith('/uploads/covers/') && oldCover !== url) {
-          const oldPath = path.join(COVERS_UPLOADS_DIR, path.basename(oldCover));
-          if (fs.existsSync(oldPath)) try { fs.unlinkSync(oldPath); } catch {}
+          const siteCfg = await getEffectiveSiteConfig();
+          const stillUsed = items.some((it) => it.id !== id && it.coverImage === oldCover) || siteCfg.heroImageUrl === oldCover;
+          if (!stillUsed) {
+            const oldPath = path.join(COVERS_UPLOADS_DIR, path.basename(oldCover));
+            if (fs.existsSync(oldPath)) try { fs.unlinkSync(oldPath); } catch {}
+          }
         }
       }
 
@@ -1756,18 +1886,20 @@ async function startServer() {
       res.json({
         whatsappNumber: WHATSAPP_NUMBER,
         currency: 'USD',
-        heroImageUrl: siteConfig.heroImageUrl || null
+        heroImageUrl: siteConfig.heroImageUrl || null,
+        heroFraming: normalizeHeroFraming(siteConfig.heroFraming)
       });
     } catch {
       res.json({
         whatsappNumber: WHATSAPP_NUMBER,
         currency: 'USD',
-        heroImageUrl: null
+        heroImageUrl: null,
+        heroFraming: { ...DEFAULT_HERO_FRAMING }
       });
     }
   });
 
-  // --- 1.1 ADMIN: PERSONALIZACIÓN DEL SITIO (IMAGEN DEL HERO) ---
+  // --- 1.1 ADMIN: PERSONALIZACIÓN DEL SITIO (IMAGEN Y ENCUADRE DEL HERO) ---
   app.get('/api/admin/hero-image', requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const siteConfig = await getEffectiveSiteConfig();
@@ -1775,6 +1907,7 @@ async function startServer() {
         success: true,
         heroImageUrl: siteConfig.heroImageUrl || null,
         storagePath: siteConfig.heroImageStoragePath || null,
+        heroFraming: normalizeHeroFraming(siteConfig.heroFraming),
         updatedAt: siteConfig.updatedAt || null
       });
     } catch (err: any) {
@@ -1784,7 +1917,7 @@ async function startServer() {
 
   app.post('/api/admin/hero-image', requireAdminAuth, async (req: Request, res: Response) => {
     try {
-      const { url, storagePath } = req.body;
+      const { url, storagePath, heroFraming } = req.body;
 
       if (!url || typeof url !== 'string' || !url.trim()) {
         return res.status(400).json({ error: 'La URL o ruta de la nueva imagen es obligatoria.' });
@@ -1826,10 +1959,13 @@ async function startServer() {
       const previousStoragePath = previousConfig.heroImageStoragePath;
       const previousUrl = previousConfig.heroImageUrl;
 
-      // 3. Actualizar y persistir la nueva referencia del HERO
+      const normalizedFraming = normalizeHeroFraming(heroFraming);
+
+      // 3. Actualizar y persistir la nueva referencia y encuadre del HERO
       const updatedConfig: SiteConfig = {
         heroImageUrl: cleanUrl,
         heroImageStoragePath: cleanStoragePath || '',
+        heroFraming: normalizedFraming,
         updatedAt: new Date().toISOString()
       };
 
@@ -1848,19 +1984,23 @@ async function startServer() {
         });
       }
 
-      // 5. Eliminar la imagen anterior ÚNICAMENTE tras confirmar el nuevo uso
-      if (previousStoragePath && previousStoragePath !== cleanStoragePath) {
-        if (isSupabaseConfigured()) {
-          await deleteFileFromStorage('anomaly-covers', previousStoragePath);
-        }
-        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousStoragePath));
-        if (fs.existsSync(oldLocal)) {
-          try { fs.unlinkSync(oldLocal); } catch {}
-        }
-      } else if (previousUrl && previousUrl !== cleanUrl && previousUrl.startsWith('/uploads/covers/')) {
-        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousUrl));
-        if (fs.existsSync(oldLocal)) {
-          try { fs.unlinkSync(oldLocal); } catch {}
+      // 5. Eliminar la imagen anterior ÚNICAMENTE si ningún producto del catálogo la utiliza
+      const localItems = readLocalDatabase();
+      const usedByLocalCatalog = localItems.some((it) => it.coverImage === previousUrl);
+      if (!usedByLocalCatalog) {
+        if (previousStoragePath && previousStoragePath !== cleanStoragePath) {
+          if (isSupabaseConfigured()) {
+            await deleteFileFromStorage('anomaly-covers', previousStoragePath);
+          }
+          const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousStoragePath));
+          if (fs.existsSync(oldLocal)) {
+            try { fs.unlinkSync(oldLocal); } catch {}
+          }
+        } else if (previousUrl && previousUrl !== cleanUrl && previousUrl.startsWith('/uploads/covers/')) {
+          const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousUrl));
+          if (fs.existsSync(oldLocal)) {
+            try { fs.unlinkSync(oldLocal); } catch {}
+          }
         }
       }
 
@@ -1868,11 +2008,47 @@ async function startServer() {
         success: true,
         heroImageUrl: cleanUrl,
         storagePath: cleanStoragePath,
+        heroFraming: normalizedFraming,
         message: 'Imagen del HERO actualizada y confirmada con éxito en el sistema.'
       });
     } catch (err: any) {
       console.error('Error al actualizar imagen del HERO:', err);
       return res.status(500).json({ error: 'Error interno al actualizar imagen del HERO.', details: err.message });
+    }
+  });
+
+  app.put('/api/admin/hero-image/framing', requireAdminAuth, async (req: Request, res: Response) => {
+    try {
+      const rawFraming = (req.body && typeof req.body === 'object' && 'heroFraming' in req.body)
+        ? req.body.heroFraming
+        : req.body;
+      if (!rawFraming || typeof rawFraming !== 'object') {
+        return res.status(400).json({ error: 'Los parámetros de encuadre del HERO son obligatorios.' });
+      }
+
+      const previousConfig = await getEffectiveSiteConfig();
+      const normalizedFraming = normalizeHeroFraming(rawFraming);
+      const updatedConfig: SiteConfig = {
+        ...previousConfig,
+        heroFraming: normalizedFraming,
+        updatedAt: new Date().toISOString()
+      };
+
+      const saved = await saveEffectiveSiteConfig(updatedConfig);
+      if (!saved) {
+        return res.status(500).json({ error: 'No se pudo guardar el encuadre del HERO.' });
+      }
+
+      return res.json({
+        success: true,
+        heroImageUrl: updatedConfig.heroImageUrl || null,
+        heroFraming: normalizedFraming,
+        updatedAt: updatedConfig.updatedAt,
+        message: 'Encuadre del HERO guardado y aplicado correctamente.'
+      });
+    } catch (err: any) {
+      console.error('Error al actualizar encuadre del HERO:', err);
+      return res.status(500).json({ error: 'Error interno al guardar encuadre del HERO.', details: err.message });
     }
   });
 
@@ -1882,30 +2058,36 @@ async function startServer() {
       const updatedConfig: SiteConfig = {
         heroImageUrl: '',
         heroImageStoragePath: '',
+        heroFraming: { ...DEFAULT_HERO_FRAMING },
         updatedAt: new Date().toISOString()
       };
 
       await saveEffectiveSiteConfig(updatedConfig);
 
-      // Limpiar archivo personalizado anterior si existía
-      if (previousConfig.heroImageStoragePath) {
-        if (isSupabaseConfigured()) {
-          await deleteFileFromStorage('anomaly-covers', previousConfig.heroImageStoragePath);
-        }
-        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousConfig.heroImageStoragePath));
-        if (fs.existsSync(oldLocal)) {
-          try { fs.unlinkSync(oldLocal); } catch {}
-        }
-      } else if (previousConfig.heroImageUrl && previousConfig.heroImageUrl.startsWith('/uploads/covers/')) {
-        const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousConfig.heroImageUrl));
-        if (fs.existsSync(oldLocal)) {
-          try { fs.unlinkSync(oldLocal); } catch {}
+      // Limpiar archivo personalizado anterior si existía y no está en uso por el catálogo
+      const localItems = readLocalDatabase();
+      const usedByCatalog = localItems.some((it) => it.coverImage === previousConfig.heroImageUrl);
+      if (!usedByCatalog) {
+        if (previousConfig.heroImageStoragePath) {
+          if (isSupabaseConfigured()) {
+            await deleteFileFromStorage('anomaly-covers', previousConfig.heroImageStoragePath);
+          }
+          const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousConfig.heroImageStoragePath));
+          if (fs.existsSync(oldLocal)) {
+            try { fs.unlinkSync(oldLocal); } catch {}
+          }
+        } else if (previousConfig.heroImageUrl && previousConfig.heroImageUrl.startsWith('/uploads/covers/')) {
+          const oldLocal = path.join(COVERS_UPLOADS_DIR, path.basename(previousConfig.heroImageUrl));
+          if (fs.existsSync(oldLocal)) {
+            try { fs.unlinkSync(oldLocal); } catch {}
+          }
         }
       }
 
       return res.json({
         success: true,
         heroImageUrl: null,
+        heroFraming: { ...DEFAULT_HERO_FRAMING },
         message: 'Imagen del HERO restablecida al diseño original con éxito.'
       });
     } catch (err: any) {
@@ -1933,43 +2115,26 @@ async function startServer() {
       if (!item) {
         const localItems = readLocalDatabase();
         item = localItems.find((it) => it.id === id);
-        if (!item) {
-          const lowerId = id.toLowerCase().trim();
-          item = localItems.find((it) =>
-            it.title.toLowerCase().trim() === lowerId ||
-            it.id.toLowerCase() === lowerId ||
-            (it.audioUrl && it.audioUrl.toLowerCase().includes(lowerId))
-          );
-        }
-      }
-
-      // Fallback matching directly in AUDIO_UPLOADS_DIR
-      if (!item && fs.existsSync(AUDIO_UPLOADS_DIR)) {
-        const files = fs.readdirSync(AUDIO_UPLOADS_DIR);
-        const cleanId = id.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const matchingFile = files.find((f) => f.toLowerCase().replace(/[^a-z0-9]/g, '').includes(cleanId));
-        if (matchingFile) {
-          const fullPath = path.join(AUDIO_UPLOADS_DIR, matchingFile);
-          const ext = path.extname(matchingFile).toLowerCase() || '.mp3';
-          const downloadName = `${id.toUpperCase()}_MASTER${ext}`;
-          res.setHeader('Content-Type', ext === '.mp3' ? 'audio/mpeg' : ext === '.zip' ? 'application/zip' : 'audio/wav');
-          res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-          return fs.createReadStream(fullPath).pipe(res);
-        }
       }
 
       if (!item) {
         return res.status(404).json({ error: 'Producto no encontrado en el catálogo.' });
       }
 
-      const isFree = Boolean(item.is_free || item.isFree || (item.price !== undefined && Number(item.price) === 0));
+      const isPublished = item.is_published !== undefined ? Boolean(item.is_published) : (item.isPublished !== false);
+      if (!isPublished) {
+        return res.status(403).json({ error: 'Este producto no está disponible para descarga pública.' });
+      }
+
+      const isFreeFlag = item.is_free !== undefined ? Boolean(item.is_free) : Boolean(item.isFree);
+      const isFree = isFreeFlag && Number(item.price || 0) === 0;
       if (!isFree) {
         return res.status(403).json({ error: 'Este elemento es de pago. Pulsa COMPRAR para adquirirlo directamente por WhatsApp.' });
       }
 
       // Check Supabase Storage
       const storagePath = item.audio_storage_path || item.audioStoragePath;
-      if (storagePath) {
+      if (storagePath && isSupabaseConfigured()) {
         const existsInPrivate = await checkFileExistsInStorage('anomaly-audio-masters', storagePath);
         if (existsInPrivate) {
           const signedUrl = await createSignedAudioUrl(storagePath, 3600);
@@ -1997,7 +2162,7 @@ async function startServer() {
         if (audioUrl.startsWith('/uploads/audio/')) {
           const localFile = path.basename(audioUrl);
           const fullPath = path.join(AUDIO_UPLOADS_DIR, localFile);
-          if (fs.existsSync(fullPath)) {
+          if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
             const ext = path.extname(localFile).toLowerCase() || '.wav';
             const cleanTitle = (item.title || 'ANOMALY_SOUND').replace(/[^a-zA-Z0-9_-]/g, '_');
             const downloadName = `${cleanTitle}_MASTER${ext}`;
@@ -2016,12 +2181,10 @@ async function startServer() {
         }
       }
 
-      // Si no existe archivo físico en disco para un elemento gratuito, generar buffer WAV auténtico
-      const cleanTitle = (item.title || 'ANOMALY_SOUND').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const wavBuf = createBasicWavBuffer(2.0, item.bpm ? item.bpm * 1.5 : 130);
-      res.setHeader('Content-Type', 'audio/wav');
-      res.setHeader('Content-Disposition', `attachment; filename="${cleanTitle}_MASTER.wav"`);
-      return res.end(wavBuf);
+      return res.status(404).json({
+        error: 'El archivo master original asociado a este producto no está disponible en el almacenamiento.',
+        itemId: item.id
+      });
     } catch (err: any) {
       console.error('Error en descarga gratuita:', err);
       return res.status(500).json({ error: 'Error interno al procesar la descarga.', details: err.message });

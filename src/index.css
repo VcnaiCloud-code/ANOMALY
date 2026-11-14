@@ -170,11 +170,21 @@ img { display: block; max-width: 100%; }
 @media (max-width: 52rem) { .nav { display: none; } }
 
 /* ---------- hero ---------- */
-.hero { position: relative; background: radial-gradient(ellipse 60% 55% at 78% 40%, rgba(255,255,255,0.05), transparent 70%), var(--bg); }
-.hero-media { position: relative; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab; }
-.hero-media.dragging { cursor: grabbing; }
-.hero-track { display: flex; height: 100%; will-change: transform; }
-.slide { position: relative; flex: 0 0 100%; height: 100%; }
+.hero { position: relative; overflow: hidden; background: radial-gradient(ellipse 60% 55% at 78% 40%, rgba(255,255,255,0.05), transparent 70%), var(--bg); }
+.hero-media {
+  position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0;
+  overflow: hidden; user-select: none; -webkit-user-select: none;
+  -webkit-mask-image: linear-gradient(to top, transparent 0%, #000 12%);
+  mask-image: linear-gradient(to top, transparent 0%, #000 12%);
+}
+.hero-media::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  background:
+    linear-gradient(90deg, rgba(5,5,5,0.42) 0%, rgba(5,5,5,0.18) 48%, rgba(5,5,5,0.06) 100%),
+    linear-gradient(180deg, rgba(5,5,5,0.22) 0%, rgba(5,5,5,0.04) 45%, rgba(5,5,5,0.42) 100%);
+}
+.hero-track { display: flex; width: 100%; height: 100%; will-change: transform; }
+.slide { position: relative; flex: 0 0 100%; width: 100%; height: 100%; overflow: hidden; }
 .slide img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
 .hero-text { container-type: inline-size; }
 .hero h1 { margin: 0.9rem 0 1.2rem; text-transform: uppercase; font-weight: 900; font-stretch: 125%; line-height: 0.88; letter-spacing: -0.035em; }
@@ -198,27 +208,14 @@ img { display: block; max-width: 100%; }
 .swipe-hint svg { width: 1rem; height: 1rem; }
 
 @media (max-width: 52rem) {
-  .hero { display: flex; flex-direction: column; min-height: calc(100vh - var(--tick)); min-height: calc(100svh - var(--tick)); }
-  .hero-media {
-    flex: 1 1 0; height: auto; min-height: 14rem;
-    -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%); mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
-  }
-  .slide img { object-position: 50% 25%; }
-  .hero-content { padding: 0 1.25rem 1.6rem; }
+  .hero { display: flex; flex-direction: column; justify-content: flex-end; min-height: calc(100vh - var(--tick)); min-height: calc(100svh - var(--tick)); }
+  .hero-content { position: relative; z-index: 2; padding: 6rem 1.25rem 2.2rem; margin-top: auto; }
   .hero-controls { margin: -0.5rem 0 1.4rem; }
   .hero-sub { font-size: 0.98rem; }
 }
 
 @media (min-width: 52.01rem) {
   .hero { height: calc(100vh - var(--tick)); height: calc(100svh - var(--tick)); min-height: 36rem; max-height: 58rem; }
-  .hero-media {
-    position: absolute; top: 0; right: 0; bottom: 0; width: 54%;
-    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 26%), linear-gradient(to top, transparent 0%, #000 16%);
-    -webkit-mask-composite: source-in;
-    mask-image: linear-gradient(to right, transparent 0%, #000 26%), linear-gradient(to top, transparent 0%, #000 16%);
-    mask-composite: intersect;
-  }
-  .slide img { object-position: 50% 30%; }
   .hero-content { position: relative; z-index: 2; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 5rem var(--hp) 4rem; }
   .hero-text { width: calc(46vw - var(--hp) - 2vw); }
   .hero-controls { position: absolute; left: var(--hp); right: var(--hp); bottom: 1.75rem; }
@@ -355,7 +352,7 @@ img { display: block; max-width: 100%; }
     background-image:
       linear-gradient(100deg, transparent 44%, rgba(255,255,255,0.6) 50%, transparent 56%),
       linear-gradient(rgba(228,230,236,0.42), rgba(228,230,236,0.42)),
-      url('/src/assets/images/about_sculpture_1793942752249.jpg');
+      url('/assets/aistudio/HERO_ca1bd082.jpg');
     background-size: 300% 100%, auto, 5.5rem auto;
     -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;
     animation: shine 6s ease-in-out infinite;

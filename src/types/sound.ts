@@ -131,3 +131,11 @@ export interface StorageConfig {
   r2Endpoint?: string;
   whatsappNumber?: string;
 }
+
+export interface HeroFraming {
+  fit: 'cover' | 'contain';
+  posX: number;
+  posY: number;
+  scale: number;
+}
+

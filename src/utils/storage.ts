@@ -5,7 +5,7 @@
  * Leads & Orders management
  */
 
-import { Order, SoundCategory, SoundProduct, SoundTrack, StorageConfig, UserAccount } from '../types/sound';
+import { HeroFraming, Order, SoundCategory, SoundItem, SoundProduct, SoundTrack, StorageConfig, UserAccount } from '../types/sound';
 import { generateSyntheticWaveform } from './audioEngine';
 
 const DB_NAME = 'AnomalySoundDB';
@@ -313,7 +313,6 @@ export function recordDownloadStat(trackId: string, trackTitle: string) {
 // -------------------------------------------------------------
 // NEW CATALOG SYSTEM: ONE SHOTS, BEATS, SAMPLES
 // -------------------------------------------------------------
-import { SoundItem } from '../types/sound';
 
 export const INITIAL_CATALOG_ITEMS: SoundItem[] = [];
 
@@ -779,7 +778,19 @@ export async function uploadFileApi(
 // PERSONALIZACIÓN DEL SITIO / HERO IMAGE API
 // -------------------------------------------------------------------------------
 
-export async function fetchHeroImageApi(): Promise<{ heroImageUrl: string | null; storagePath?: string | null; updatedAt?: string | null }> {
+export const DEFAULT_HERO_FRAMING: HeroFraming = {
+  fit: 'cover',
+  posX: 50,
+  posY: 50,
+  scale: 1
+};
+
+export async function fetchHeroImageApi(): Promise<{
+  heroImageUrl: string | null;
+  storagePath?: string | null;
+  heroFraming?: HeroFraming;
+  updatedAt?: string | null;
+}> {
   try {
     const token = getAdminToken();
     const res = await fetch('/api/admin/hero-image', {
@@ -793,6 +804,7 @@ export async function fetchHeroImageApi(): Promise<{ heroImageUrl: string | null
       return {
         heroImageUrl: data.heroImageUrl || null,
         storagePath: data.storagePath || null,
+        heroFraming: data.heroFraming || DEFAULT_HERO_FRAMING,
         updatedAt: data.updatedAt || null
       };
     }
@@ -802,16 +814,20 @@ export async function fetchHeroImageApi(): Promise<{ heroImageUrl: string | null
   try {
     const res = await fetch('/api/config');
     const data = await res.json();
-    return { heroImageUrl: data.heroImageUrl || null };
+    return {
+      heroImageUrl: data.heroImageUrl || null,
+      heroFraming: data.heroFraming || DEFAULT_HERO_FRAMING
+    };
   } catch {
-    return { heroImageUrl: null };
+    return { heroImageUrl: null, heroFraming: DEFAULT_HERO_FRAMING };
   }
 }
 
 export async function updateHeroImageApi(
   file: File,
+  heroFraming?: HeroFraming,
   token?: string
-): Promise<{ success: boolean; heroImageUrl?: string; message?: string; error?: string }> {
+): Promise<{ success: boolean; heroImageUrl?: string; heroFraming?: HeroFraming; message?: string; error?: string }> {
   try {
     // 1. Subir primero la nueva imagen a Supabase Storage (o streaming local)
     const uploadResult = await uploadFileApi(file, 'cover', token);
@@ -837,7 +853,8 @@ export async function updateHeroImageApi(
       headers,
       body: JSON.stringify({
         url: uploadResult.url,
-        storagePath: uploadResult.storagePath || ''
+        storagePath: uploadResult.storagePath || '',
+        heroFraming: heroFraming || DEFAULT_HERO_FRAMING
       })
     });
 
@@ -852,12 +869,54 @@ export async function updateHeroImageApi(
     return {
       success: true,
       heroImageUrl: data.heroImageUrl,
+      heroFraming: data.heroFraming || heroFraming || DEFAULT_HERO_FRAMING,
       message: data.message || 'Imagen del HERO actualizada y confirmada correctamente.'
     };
   } catch (err: any) {
     return {
       success: false,
       error: err.message || 'Error de conexión al actualizar la imagen del HERO.'
+    };
+  }
+}
+
+export async function updateHeroFramingApi(
+  heroFraming: HeroFraming,
+  token?: string
+): Promise<{ success: boolean; heroFraming?: HeroFraming; message?: string; error?: string }> {
+  try {
+    const effectiveToken = token || getAdminToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (effectiveToken) {
+      headers['Authorization'] = `Bearer ${effectiveToken}`;
+    }
+
+    const res = await fetch('/api/admin/hero-image/framing', {
+      method: 'PUT',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({ heroFraming })
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return {
+        success: false,
+        error: data.error || 'Error al guardar el encuadre del HERO.'
+      };
+    }
+
+    return {
+      success: true,
+      heroFraming: data.heroFraming || heroFraming,
+      message: data.message || 'Encuadre del HERO guardado correctamente.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Error de conexión al guardar el encuadre del HERO.'
     };
   }
 }
@@ -899,5 +958,6 @@ export async function resetHeroImageApi(
     };
   }
 }
+
 
 

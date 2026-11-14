@@ -7,8 +7,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AdminRoute } from './components/AdminRoute';
 import { SoundCheckoutModal } from './components/SoundCheckoutModal';
-import { CatalogSection, SoundItem } from './types/sound';
+import { CatalogSection, HeroFraming, SoundItem } from './types/sound';
 import {
+  DEFAULT_HERO_FRAMING,
   getStoredCatalogItems,
   fetchPublicCatalogApi,
   saveLead
@@ -66,18 +67,22 @@ export default function App() {
     return (import.meta as any).env?.VITE_WHATSAPP_NUMBER || '';
   });
 
-  const DEFAULT_HERO_IMAGE = '/src/assets/images/hero_sound_sculpture_1793944360196.jpg';
+  const DEFAULT_HERO_IMAGE = '/assets/aistudio/HERO_ca1bd082.jpg';
   const [heroImageUrl, setHeroImageUrl] = useState<string>(DEFAULT_HERO_IMAGE);
+  const [heroFraming, setHeroFraming] = useState<HeroFraming>(DEFAULT_HERO_FRAMING);
 
   const fetchConfig = () => {
     fetch('/api/config')
       .then((res) => res.json())
-      .then((data: { whatsappNumber?: string; heroImageUrl?: string | null }) => {
+      .then((data: { whatsappNumber?: string; heroImageUrl?: string | null; heroFraming?: HeroFraming }) => {
         if (data.whatsappNumber) setSupportWhatsappNumber(data.whatsappNumber);
         if (data.heroImageUrl) {
           setHeroImageUrl(data.heroImageUrl);
         } else {
           setHeroImageUrl(DEFAULT_HERO_IMAGE);
+        }
+        if (data.heroFraming) {
+          setHeroFraming(data.heroFraming);
         }
       })
       .catch(() => {});
@@ -360,6 +365,9 @@ export default function App() {
           onHeroImageUpdated={(newUrl) => {
             setHeroImageUrl(newUrl || DEFAULT_HERO_IMAGE);
           }}
+          onHeroFramingUpdated={(newFraming) => {
+            setHeroFraming(newFraming);
+          }}
         />
       </div>
     );
@@ -454,6 +462,12 @@ export default function App() {
                 src={heroImageUrl || DEFAULT_HERO_IMAGE}
                 alt="Escultura sonora de precisión de ANOMALY SOUND"
                 draggable={false}
+                style={{
+                  objectFit: heroFraming.fit,
+                  objectPosition: `${heroFraming.posX}% ${heroFraming.posY}%`,
+                  transform: heroFraming.scale !== 1 ? `scale(${heroFraming.scale})` : undefined,
+                  transformOrigin: `${heroFraming.posX}% ${heroFraming.posY}%`
+                }}
               />
             </div>
           </div>

@@ -136,7 +136,7 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
         <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/[0.08] flex items-center gap-4">
           <div className="relative w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black">
             <img
-              src={item.coverImage || '/src/assets/images/hero_sound_sculpture_1793944360196.jpg'}
+              src={item.coverImage || '/assets/aistudio/HERO_ca1bd082.jpg'}
               alt={item.title}
               className="w-full h-full object-cover"
             />
