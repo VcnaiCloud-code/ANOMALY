@@ -54,7 +54,7 @@ import {
   fetchSupabaseStatusApi,
   migrateToSupabaseApi
 } from '../utils/storage';
-import { getAudioContext, playBuffer, stopCurrentAudio, getAudioBufferForItem, decodeAudio } from '../utils/audioEngine';
+import { playItemFast, prefetchAudioForItem, invalidateAudioCache, stopCurrentAudio, decodeAudio } from '../utils/audioEngine';
 
 interface AdminRouteProps {
   onBackToApp: () => void;
@@ -477,7 +477,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     setCoverPreviewUrl(previewUrl);
   }
 
-  // Preescucha de audio en la tabla
+  // Preescucha instantánea de audio en la tabla
   async function handleTogglePlay(item: SoundItem) {
     if (playingId === item.id) {
       stopCurrentAudio();
@@ -486,14 +486,25 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
     }
 
     stopCurrentAudio();
+    setPlayingId(item.id);
     try {
-      getAudioContext();
-      const buffer = await getAudioBufferForItem(item);
-      playBuffer(buffer, 0, 1.0, false, () => setPlayingId(null));
-      setPlayingId(item.id);
+      await playItemFast(item, {
+        loop: false,
+        restart: true,
+        adminToken: getAdminToken() || undefined,
+        onEnded: () => setPlayingId((curr) => (curr === item.id ? null : curr)),
+        onError: (err) => {
+          setPlayingId((curr) => (curr === item.id ? null : curr));
+          setStatusFeedback({
+            type: 'error',
+            message: `Error al reproducir "${item.title}": ${err.message || 'Archivo de audio no disponible.'}`
+          });
+        }
+      });
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       console.warn('Audio preview error:', err);
-      setPlayingId(null);
+      setPlayingId((curr) => (curr === item.id ? null : curr));
       setStatusFeedback({
         type: 'error',
         message: `Error al reproducir "${item.title}": ${err?.message || 'Archivo de audio no disponible.'}`
@@ -627,6 +638,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       const token = getAdminToken();
       const res = await replaceItemFileApi(itemToReplace.id, replacementFile, replaceKind, token || undefined);
       if (res.success && res.item) {
+        invalidateAudioCache(itemToReplace.id);
         const fresh = await fetchAdminCatalogApi(token || undefined);
         setItems(fresh);
         onCatalogUpdated();
@@ -767,6 +779,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       const token = getAdminToken();
       await deleteItemApi(itemToDelete.id, token || undefined);
       await deleteAudioBlob(itemToDelete.id);
+      invalidateAudioCache(itemToDelete.id);
 
       const fresh = await fetchAdminCatalogApi(token || undefined);
       setItems(fresh);
@@ -829,55 +842,68 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   // -------------------------------------------------------------------------
   if (!isAdmin) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-[#050505] relative select-none">
-        <div className="absolute inset-0 bg-radial from-white/[0.03] to-transparent pointer-events-none" />
+      <div className="admin-shell min-h-screen flex items-center justify-center p-5 select-none">
+        <div className="admin-ambient" aria-hidden="true">
+          <div className="admin-ambient-orb-1" />
+          <div className="admin-ambient-orb-2" />
+        </div>
 
-        <div className="w-full max-w-md p-8 rounded-2xl bg-black/60 backdrop-blur-2xl border border-white/10 shadow-2xl relative z-10 space-y-6">
-          <div className="flex items-center justify-between border-b border-white/10 pb-4">
-            <div>
-              <span className="text-[10px] uppercase tracking-widest text-zinc-400 font-mono">Acceso Privado</span>
-              <h1 className="text-xl font-black text-white font-display tracking-wider">ANOMALY SOUND</h1>
+        <div className="w-full max-w-md p-7 md:p-9 rounded-3xl admin-glass admin-modal-panel relative z-10 space-y-6">
+          <div className="flex items-center justify-between border-b border-white/[0.08] pb-5">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase tracking-[0.22em] text-zinc-400 font-mono block">
+                Acceso Privado
+              </span>
+              <h1 className="text-xl font-black text-white font-display tracking-wider uppercase">
+                ANOMALY SOUND
+              </h1>
             </div>
             <button
               onClick={onBackToApp}
-              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+              className="p-2.5 rounded-xl admin-btn-glass text-zinc-400 hover:text-white"
               title="Volver al catálogo"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="flex items-center gap-3 p-3.5 rounded-xl bg-white/[0.03] border border-white/5 text-xs text-zinc-400">
-            <Lock className="w-4 h-4 text-white shrink-0" />
-            <span>Zona restringida a administradores autorizados. Las operaciones y el almacenamiento están protegidos por el servidor.</span>
+          <div className="flex items-start gap-3 p-3.5 rounded-2xl admin-glass-subtle text-xs text-zinc-400 leading-relaxed">
+            <Lock className="w-4 h-4 text-zinc-200 shrink-0 mt-0.5" />
+            <span>
+              Zona restringida a administradores autorizados. Las operaciones y el almacenamiento están protegidos por el servidor.
+            </span>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-mono uppercase text-zinc-400 mb-1.5">Usuario o Email</label>
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                Usuario o Email
+              </label>
               <input
                 type="text"
                 placeholder="admin@anomalysound.com"
                 value={adminEmail}
                 onChange={(e) => setAdminEmail(e.target.value)}
-                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-zinc-600 focus:outline-none focus:border-white/40 font-mono text-sm"
+                className="w-full px-4 py-3 rounded-xl admin-input text-white placeholder-zinc-600 font-mono text-sm"
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-mono uppercase text-zinc-400 mb-1.5">Clave de Administrador</label>
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                Clave de Administrador
+              </label>
               <input
                 type="password"
                 placeholder="••••••••••••"
                 value={adminPassword}
                 onChange={(e) => setAdminPassword(e.target.value)}
                 required
-                className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-zinc-600 focus:outline-none focus:border-white/40 font-mono text-sm"
+                className="w-full px-4 py-3 rounded-xl admin-input text-white placeholder-zinc-600 font-mono text-sm"
               />
             </div>
 
             {loginError && (
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-200">
+              <div className="flex items-center gap-2.5 p-3.5 rounded-2xl bg-red-950/35 border border-red-500/30 backdrop-blur-md text-xs text-red-200">
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
                 <span>{loginError}</span>
               </div>
@@ -886,13 +912,15 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             <button
               type="submit"
               disabled={isLoggingIn}
-              className="w-full py-3 rounded-xl font-bold tracking-wider text-xs uppercase bg-white text-black hover:bg-zinc-200 transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-50"
+              className="w-full py-3.5 rounded-xl font-bold tracking-[0.14em] text-xs uppercase admin-btn-primary flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {isLoggingIn ? 'Verificando...' : 'Iniciar Sesión'}
             </button>
 
-            <div className="text-center pt-2">
-              <span className="text-[11px] text-zinc-500 font-mono">Autenticación segura vinculada a variables de entorno</span>
+            <div className="text-center pt-1">
+              <span className="text-[11px] text-zinc-500 font-mono">
+                Autenticación segura vinculada a variables de entorno
+              </span>
             </div>
           </form>
         </div>
@@ -904,35 +932,47 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
   // 2. PANEL DE ADMINISTRACIÓN PRINCIPAL (3 APARTADOS: ONE SHOTS, BEATS, SAMPLES)
   // -------------------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-[#050505] text-[#f5f5f5] pb-24">
+    <div className="admin-shell pb-24">
+      <div className="admin-ambient" aria-hidden="true">
+        <div className="admin-ambient-orb-1" />
+        <div className="admin-ambient-orb-2" />
+      </div>
+
       {/* Barra superior de administración */}
-      <header className="sticky top-0 z-30 bg-[#08080a]/90 backdrop-blur-xl border-b border-white/[0.08] px-4 md:px-8 py-3.5 flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <header className="sticky top-0 z-30 admin-header-glass px-4 md:px-8 py-3.5 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5 min-w-0">
           <button
             onClick={onBackToApp}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-xs font-mono text-zinc-300 transition-colors"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl admin-btn-glass text-xs font-mono text-zinc-300 hover:text-white shrink-0"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>Ver Catálogo Público</span>
           </button>
           <div className="h-4 w-px bg-white/10 hidden sm:block" />
-          <span className="font-display font-black text-sm tracking-widest text-white uppercase">
-            ANOMALY SOUND <span className="text-[11px] font-mono text-zinc-500 font-normal ml-1.5">· Panel Privado</span>
-          </span>
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span className="font-display font-black text-sm tracking-[0.18em] text-white uppercase truncate">
+              ANOMALY SOUND
+            </span>
+            <span className="hidden md:inline text-[11px] font-mono text-zinc-500">
+              · Panel Privado
+            </span>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.03] border border-white/5 text-[11px] font-mono text-zinc-400">
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="hidden lg:flex items-center gap-2.5 px-3.5 py-1.5 rounded-full admin-glass-subtle text-[11px] font-mono text-zinc-400 tabular-nums">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Almacenamiento: {storageUsage.usedMB} MB ({storageUsage.trackBlobsCount} archivos)</span>
+            <span>
+              Almacenamiento: {storageUsage.usedMB} MB ({storageUsage.trackBlobsCount} archivos)
+            </span>
           </div>
 
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-950/20 hover:bg-red-950/40 border border-red-500/20 text-red-300 text-xs font-mono transition-colors"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-red-500/[0.08] hover:bg-red-500/[0.16] border border-red-500/20 hover:border-red-500/35 backdrop-blur-md text-red-300 hover:text-red-200 text-xs font-mono transition-all active:scale-95"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Cerrar Sesión</span>
+            <span className="hidden sm:inline">Cerrar Sesión</span>
           </button>
         </div>
       </header>
@@ -940,10 +980,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
       {/* Notificaciones flotantes */}
       {statusFeedback && (
         <div
-          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl border shadow-2xl flex items-center gap-3 text-xs font-medium transition-all ${
+          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 text-xs font-medium backdrop-blur-2xl admin-toast-enter ${
             statusFeedback.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200 backdrop-blur-xl'
-              : 'bg-red-950/90 border-red-500/40 text-red-200 backdrop-blur-xl'
+              ? 'bg-emerald-950/80 border-emerald-400/30 text-emerald-100'
+              : 'bg-red-950/80 border-red-400/30 text-red-100'
           }`}
         >
           {statusFeedback.type === 'success' ? (
@@ -955,14 +995,17 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         </div>
       )}
 
-      <main className="max-w-6xl mx-auto px-4 md:px-8 pt-8 space-y-8">
+      <main className="relative z-10 max-w-6xl mx-auto px-4 md:px-8 pt-8 md:pt-10 space-y-6">
         {/* Encabezado y Navegación de Apartados */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/[0.08] pb-6">
-          <div>
-            <h1 className="text-2xl font-black font-display tracking-tight text-white uppercase">
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5 pb-2">
+          <div className="space-y-1.5">
+            <span className="text-[10px] font-mono uppercase tracking-[0.24em] text-zinc-500 block">
+              Estudio de Control
+            </span>
+            <h1 className="text-2xl md:text-3xl font-black font-display tracking-tight text-white uppercase">
               {currentView === 'site_customization' ? 'Personalización del Sitio' : 'Gestión de Contenido'}
             </h1>
-            <p className="text-xs text-zinc-400 mt-1">
+            <p className="text-xs text-zinc-400 max-w-xl leading-relaxed">
               {currentView === 'site_customization'
                 ? 'Administra la identidad visual del sitio y reemplaza la imagen de fondo del HERO de forma segura.'
                 : 'Sube, edita, publica y despublica audios WAV y MP3 en los 3 apartados del catálogo.'}
@@ -970,7 +1013,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
           </div>
 
           {/* Selector de apartados: LIBRERÍAS, BEATS, SAMPLES y PERSONALIZACIÓN DEL SITIO */}
-          <div className="inline-flex flex-wrap p-1 rounded-xl bg-white/[0.04] border border-white/10 gap-1">
+          <div className="inline-flex flex-wrap items-center p-1.5 rounded-2xl admin-glass-subtle gap-1">
             {(['one_shots', 'beats', 'samples'] as CatalogSection[]).map((sec) => {
               const isActive = currentView === 'catalog' && activeSection === sec;
               const count = items.filter((it) => it.section === sec).length;
@@ -984,30 +1027,36 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     setActiveSection(sec);
                     setShowUploadForm(false);
                   }}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+                  className={`px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-[0.12em] transition-all duration-200 flex items-center gap-2 ${
                     isActive
-                      ? 'bg-white text-black shadow-lg'
-                      : 'text-zinc-400 hover:text-white hover:bg-white/[0.03]'
+                      ? 'bg-white text-zinc-950 shadow-lg shadow-white/10'
+                      : 'text-zinc-400 hover:text-white hover:bg-white/[0.04]'
                   }`}
                 >
                   <span>{label}</span>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-black/20 text-black' : 'bg-white/10 text-zinc-400'}`}>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono tabular-nums ${
+                      isActive ? 'bg-black/10 text-zinc-900' : 'bg-white/[0.06] text-zinc-400'
+                    }`}
+                  >
                     {count}
                   </span>
                 </button>
               );
             })}
 
-            {/* Apartado nuevo: PERSONALIZACIÓN DEL SITIO */}
+            <div className="h-5 w-px bg-white/10 mx-1 hidden sm:block" />
+
+            {/* Apartado: PERSONALIZACIÓN DEL SITIO */}
             <button
               onClick={() => {
                 setCurrentView('site_customization');
                 setShowUploadForm(false);
               }}
-              className={`px-3.5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+              className={`px-3.5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-[0.12em] transition-all duration-200 flex items-center gap-2 ${
                 currentView === 'site_customization'
-                  ? 'bg-white text-black shadow-lg'
-                  : 'text-zinc-400 hover:text-white hover:bg-white/[0.03]'
+                  ? 'bg-white text-zinc-950 shadow-lg shadow-white/10'
+                  : 'text-zinc-400 hover:text-white hover:bg-white/[0.04]'
               }`}
             >
               <Palette className="w-3.5 h-3.5" />
@@ -1019,29 +1068,31 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
         {/* Estado de conexión con Supabase */}
         {supabaseHealth && (
           <div
-            className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            className={`px-4 py-3.5 rounded-2xl backdrop-blur-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
               supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady
-                ? 'bg-emerald-950/20 border-emerald-500/25 text-emerald-200'
-                : 'bg-amber-950/25 border-amber-500/30 text-amber-200'
+                ? 'bg-emerald-950/20 border-emerald-400/20 text-emerald-100'
+                : 'bg-amber-950/20 border-amber-400/25 text-amber-100'
             }`}
           >
-            <div className="flex items-start sm:items-center gap-3">
-              <Database
-                className={`w-4 h-4 shrink-0 mt-0.5 sm:mt-0 ${
+            <div className="flex items-start sm:items-center gap-3 min-w-0">
+              <div
+                className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
                   supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady
-                    ? 'text-emerald-400'
-                    : 'text-amber-400'
+                    ? 'bg-emerald-500/10 border-emerald-400/25 text-emerald-400'
+                    : 'bg-amber-500/10 border-amber-400/25 text-amber-400'
                 }`}
-              />
-              <div className="space-y-0.5">
-                <div className="text-xs font-mono font-bold uppercase tracking-wider">
+              >
+                <Database className="w-4 h-4" />
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-[0.12em]">
                   {supabaseHealth.connected && supabaseHealth.tablesReady && supabaseHealth.storageReady
                     ? 'Supabase Conectado (PostgreSQL + Storage Activos)'
                     : !supabaseHealth.configured
                     ? 'Modo Local Activo — Supabase no conectado en el servidor'
                     : 'Supabase Conectado con Configuración Pendiente'}
                 </div>
-                <p className="text-[11px] font-mono opacity-85">
+                <p className="text-[11px] font-mono opacity-75 truncate sm:whitespace-normal">
                   {supabaseHealth.configured
                     ? supabaseHealth.message
                     : `Faltan las variables de entorno ${
@@ -1059,7 +1110,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   type="button"
                   onClick={handleMigrateToSupabase}
                   disabled={isMigratingToSupabase}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-[11px] font-mono font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+                  className="px-3.5 py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 text-[11px] font-mono font-bold uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
                 >
                   {isMigratingToSupabase ? 'Sincronizando...' : 'Sincronizar Local → Supabase'}
                 </button>
@@ -1067,7 +1118,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               <button
                 type="button"
                 onClick={() => fetchSupabaseStatusApi().then(setSupabaseHealth)}
-                className="px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs font-mono text-white transition-colors"
+                className="p-2.5 rounded-xl admin-btn-glass text-white"
                 title="Volver a comprobar conexión con Supabase"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -1080,31 +1131,32 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
           /* ========================================================================= */
           /* APARTADO: PERSONALIZACIÓN DEL SITIO (CAMBIAR IMAGEN DEL HERO)              */
           /* ========================================================================= */
-          <div className="space-y-8 animate-in fade-in duration-200">
+          <div key="view-site-customization" className="space-y-6 admin-view-enter">
             {/* Card Principal de Personalización del HERO */}
-            <div className="p-6 md:p-8 rounded-2xl bg-zinc-950/80 backdrop-blur-2xl border border-white/10 shadow-2xl space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-5">
-                <div>
-                  <div className="flex items-center gap-2.5">
-                    <span className="p-2 rounded-lg bg-white/5 border border-white/10 text-white">
-                      <ImageIcon className="w-4 h-4" />
-                    </span>
-                    <h2 className="text-lg font-black font-display tracking-wider text-white uppercase">
+            <div className="p-6 md:p-8 rounded-3xl admin-glass space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.07] pb-5">
+                <div className="flex items-start gap-3.5">
+                  <span className="p-2.5 rounded-2xl admin-glass-subtle text-white shrink-0">
+                    <ImageIcon className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h2 className="text-base md:text-lg font-black font-display tracking-wider text-white uppercase">
                       IMAGEN DE FONDO DEL HERO
                     </h2>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Control exclusivo del administrador para reemplazar la imagen de fondo del HERO sin tocar código.
+                    </p>
                   </div>
-                  <p className="text-xs text-zinc-400 mt-1">
-                    Control exclusivo del administrador para reemplazar la imagen de fondo del HERO sin tocar código.
-                  </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   {currentHeroImage === DEFAULT_HERO_IMAGE ? (
-                    <span className="px-3 py-1 rounded-full bg-white/[0.06] border border-white/10 text-zinc-400 text-xs font-mono">
+                    <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full admin-glass-subtle text-zinc-300 text-[11px] font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
                       Diseño Original (Escultura)
                     </span>
                   ) : (
-                    <span className="px-3 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs font-mono flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-400/25 text-emerald-300 text-[11px] font-mono">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       Imagen Personalizada Activa
                     </span>
@@ -1120,7 +1172,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     <span>Vista Previa del HERO Público (arrastra la imagen para encuadrar)</span>
                   </span>
                   {heroUpdatedAt && (
-                    <span className="text-[11px] text-zinc-500">
+                    <span className="text-[11px] text-zinc-500 tabular-nums">
                       Última actualización: {new Date(heroUpdatedAt).toLocaleString()}
                     </span>
                   )}
@@ -1131,14 +1183,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   onPointerMove={handleHeroPointerMove}
                   onPointerUp={handleHeroPointerEnd}
                   onPointerCancel={handleHeroPointerEnd}
-                  className="relative aspect-[16/9] md:aspect-[16/8] w-full rounded-2xl overflow-hidden border border-white/15 bg-[#050505] shadow-2xl cursor-grab active:cursor-grabbing select-none touch-none"
+                  className="relative aspect-[16/9] md:aspect-[16/8] w-full rounded-2xl overflow-hidden border border-white/[0.12] bg-[#050505] shadow-2xl cursor-grab active:cursor-grabbing select-none touch-none group"
                 >
                   {/* Imagen de fondo ocupando TODO el HERO (detrás del título) */}
                   <img
                     src={currentHeroImage}
                     alt="Hero preview"
                     draggable={false}
-                    className="w-full h-full pointer-events-none"
+                    className="w-full h-full pointer-events-none transition-[filter] duration-300"
                     style={{
                       objectFit: heroFraming.fit,
                       objectPosition: `${heroFraming.posX}% ${heroFraming.posY}%`,
@@ -1171,23 +1223,25 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   </div>
 
                   {/* Indicador flotante de coordenadas actuales */}
-                  <div className="absolute bottom-3 right-3 px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[10px] font-mono text-zinc-300 pointer-events-none">
+                  <div className="absolute bottom-3 right-3 px-3 py-1.5 rounded-xl bg-black/60 backdrop-blur-xl border border-white/15 text-[10px] font-mono text-zinc-200 pointer-events-none tabular-nums">
                     {heroFraming.fit === 'cover' ? 'Cover' : 'Completa'} · X: {heroFraming.posX}% · Y: {heroFraming.posY}% · {heroFraming.scale.toFixed(2)}x
                   </div>
                 </div>
 
                 {/* Panel de Controles de Encuadre del HERO */}
-                <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-4">
+                <div className="p-4 md:p-5 rounded-2xl admin-glass-subtle space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] font-mono uppercase text-zinc-400 mr-1">Modo de Encuadre:</span>
+                      <span className="text-[11px] font-mono uppercase text-zinc-400 mr-1">
+                        Modo de Encuadre:
+                      </span>
                       <button
                         type="button"
                         onClick={() => setHeroFraming((prev) => ({ ...prev, fit: 'cover' }))}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-1.5 border ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-mono transition-all flex items-center gap-1.5 border ${
                           heroFraming.fit === 'cover'
-                            ? 'bg-white text-black border-white font-bold'
-                            : 'bg-white/[0.04] text-zinc-300 border-white/10 hover:bg-white/[0.08]'
+                            ? 'bg-white text-zinc-950 border-white font-bold shadow-md'
+                            : 'admin-btn-glass text-zinc-300'
                         }`}
                       >
                         <Maximize2 className="w-3.5 h-3.5" />
@@ -1196,10 +1250,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                       <button
                         type="button"
                         onClick={() => setHeroFraming((prev) => ({ ...prev, fit: 'contain', scale: 1, posX: 50, posY: 50 }))}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-1.5 border ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-mono transition-all flex items-center gap-1.5 border ${
                           heroFraming.fit === 'contain'
-                            ? 'bg-white text-black border-white font-bold'
-                            : 'bg-white/[0.04] text-zinc-300 border-white/10 hover:bg-white/[0.08]'
+                            ? 'bg-white text-zinc-950 border-white font-bold shadow-md'
+                            : 'admin-btn-glass text-zinc-300'
                         }`}
                       >
                         <Minimize2 className="w-3.5 h-3.5" />
@@ -1211,7 +1265,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                       <button
                         type="button"
                         onClick={() => setHeroFraming({ ...DEFAULT_HERO_FRAMING })}
-                        className="px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5 transition-colors"
+                        className="px-3.5 py-2 rounded-xl admin-btn-glass text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Centrar</span>
@@ -1220,7 +1274,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                         type="button"
                         disabled={isSavingFraming}
                         onClick={handleSaveCurrentHeroFraming}
-                        className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                        className="px-4 py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
                       >
                         <Save className="w-3.5 h-3.5" />
                         <span>{isSavingFraming ? 'Guardando...' : 'Guardar Encuadre'}</span>
@@ -1229,11 +1283,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   </div>
 
                   {/* Sliders de precisión X, Y y Zoom */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-white/[0.06]">
-                    <div className="space-y-1.5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5 pt-3 border-t border-white/[0.06]">
+                    <div className="space-y-1">
                       <div className="flex justify-between text-[11px] font-mono text-zinc-400">
                         <span>Posición Horizontal (X)</span>
-                        <span className="text-white">{heroFraming.posX}%</span>
+                        <span className="text-white tabular-nums">{heroFraming.posX}%</span>
                       </div>
                       <input
                         type="range"
@@ -1242,14 +1296,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                         step={0.5}
                         value={heroFraming.posX}
                         onChange={(e) => setHeroFraming((prev) => ({ ...prev, posX: Number(e.target.value) }))}
-                        className="w-full accent-white cursor-pointer"
+                        className="admin-range"
                       />
                     </div>
 
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       <div className="flex justify-between text-[11px] font-mono text-zinc-400">
                         <span>Posición Vertical (Y)</span>
-                        <span className="text-white">{heroFraming.posY}%</span>
+                        <span className="text-white tabular-nums">{heroFraming.posY}%</span>
                       </div>
                       <input
                         type="range"
@@ -1258,14 +1312,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                         step={0.5}
                         value={heroFraming.posY}
                         onChange={(e) => setHeroFraming((prev) => ({ ...prev, posY: Number(e.target.value) }))}
-                        className="w-full accent-white cursor-pointer"
+                        className="admin-range"
                       />
                     </div>
 
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       <div className="flex justify-between text-[11px] font-mono text-zinc-400">
                         <span>Zoom / Escala</span>
-                        <span className="text-white">{heroFraming.scale.toFixed(2)}x</span>
+                        <span className="text-white tabular-nums">{heroFraming.scale.toFixed(2)}x</span>
                       </div>
                       <input
                         type="range"
@@ -1274,7 +1328,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                         step={0.05}
                         value={heroFraming.scale}
                         onChange={(e) => setHeroFraming((prev) => ({ ...prev, scale: Number(e.target.value) }))}
-                        className="w-full accent-white cursor-pointer"
+                        className="admin-range"
                       />
                     </div>
                   </div>
@@ -1282,26 +1336,24 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               </div>
 
               {/* Controles de Acción y Botón Principal */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-white/[0.08]">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-white/[0.07]">
                 <div className="flex flex-wrap items-center gap-3">
-                  {/* BOTÓN PRINCIPAL REQUERIDO: CAMBIAR IMAGEN DEL HERO */}
                   <button
                     type="button"
                     onClick={() => heroFileInputRef.current?.click()}
                     disabled={isUpdatingHero}
-                    className="px-6 py-3 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-black font-mono uppercase tracking-wider transition-all shadow-xl hover:scale-[1.01] active:scale-[0.98] flex items-center justify-center gap-2.5 disabled:opacity-50"
+                    className="px-6 py-3 rounded-xl admin-btn-primary text-xs font-black font-mono uppercase tracking-wider flex items-center justify-center gap-2.5 disabled:opacity-50"
                   >
-                    <UploadCloud className="w-4 h-4 text-black" />
+                    <UploadCloud className="w-4 h-4 text-zinc-950" />
                     <span>CAMBIAR IMAGEN DEL HERO</span>
                   </button>
 
-                  {/* Botón para restablecer al diseño original si está personalizada */}
                   {currentHeroImage !== DEFAULT_HERO_IMAGE && (
                     <button
                       type="button"
                       onClick={handleResetHeroImage}
                       disabled={isUpdatingHero}
-                      className="px-4 py-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-300 hover:text-white text-xs font-mono transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="px-4 py-3 rounded-xl admin-btn-glass text-zinc-300 hover:text-white text-xs font-mono flex items-center justify-center gap-2 disabled:opacity-50"
                       title="Volver a la escultura sonora original de ANOMALY SOUND"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isUpdatingHero ? 'animate-spin' : ''}`} />
@@ -1316,8 +1368,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               </div>
 
               {/* Guía de seguridad y conservación */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+              <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-white/[0.07] rounded-2xl admin-glass-subtle overflow-hidden">
+                <div className="p-4 space-y-1.5">
                   <span className="text-[11px] font-mono font-bold text-white uppercase block">
                     1. Reemplazo Seguro
                   </span>
@@ -1325,7 +1377,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     La imagen se transfiere y verifica en Supabase Storage antes de activarse. Si ocurre algún error, se conserva la actual.
                   </p>
                 </div>
-                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                <div className="p-4 space-y-1.5">
                   <span className="text-[11px] font-mono font-bold text-white uppercase block">
                     2. Persistencia Total
                   </span>
@@ -1333,7 +1385,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     Almacenada en la base de datos y configuración del servidor. Persiste entre recargas, sesiones y dispositivos.
                   </p>
                 </div>
-                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                <div className="p-4 space-y-1.5">
                   <span className="text-[11px] font-mono font-bold text-white uppercase block">
                     3. Integridad del HERO
                   </span>
@@ -1348,15 +1400,15 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
           /* ========================================================================= */
           /* VISTA DE CATÁLOGO (ONE SHOTS, BEATS, SAMPLES)                             */
           /* ========================================================================= */
-          <div className="space-y-8">
+          <div key={`view-catalog-${activeSection}`} className="space-y-6 admin-view-enter">
             {/* Banner de acceso rápido a PERSONALIZACIÓN DEL SITIO */}
-            <div className="p-3.5 px-4 rounded-xl bg-white/[0.02] border border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black">
+            <div className="p-3.5 px-4 rounded-2xl admin-glass-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-10 h-10 rounded-xl overflow-hidden shrink-0 border border-white/15 bg-black">
                   <img src={currentHeroImage} alt="" className="w-full h-full object-cover" />
                 </div>
-                <div>
-                  <span className="text-xs font-bold text-white block">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-white block truncate">
                     Personalización del Sitio · Imagen del HERO
                   </span>
                   <span className="text-[11px] font-mono text-zinc-400 block">
@@ -1364,11 +1416,11 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   </span>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => heroFileInputRef.current?.click()}
-                  className="px-3.5 py-1.5 rounded-lg bg-white text-black hover:bg-zinc-200 text-xs font-mono font-bold uppercase transition-colors flex items-center gap-1.5"
+                  className="px-3.5 py-2 rounded-xl admin-btn-primary text-[11px] font-mono font-bold uppercase flex items-center gap-1.5"
                 >
                   <UploadCloud className="w-3.5 h-3.5" />
                   <span>CAMBIAR IMAGEN DEL HERO</span>
@@ -1376,7 +1428,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 <button
                   type="button"
                   onClick={() => setCurrentView('site_customization')}
-                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-mono text-zinc-300 hover:text-white transition-colors"
+                  className="px-3.5 py-2 rounded-xl admin-btn-glass text-xs font-mono text-zinc-300 hover:text-white"
                 >
                   Ver Apartado
                 </button>
@@ -1384,693 +1436,739 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             </div>
 
             {/* Resumen de la sección activa y botón de nueva subida */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-white/[0.02] border border-white/[0.06]">
-          <div className="flex items-center gap-6">
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 block">Apartado Activo</span>
-              <span className="text-lg font-black font-display text-white uppercase">
-                {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'}
-              </span>
-            </div>
-            <div className="h-8 w-px bg-white/10" />
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <span className="flex items-center gap-1.5 text-emerald-400">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                {publishedCount} Publicados
-              </span>
-              <span className="flex items-center gap-1.5 text-zinc-400">
-                <span className="w-2 h-2 rounded-full bg-zinc-500" />
-                {draftCount} Borradores (Privados)
-              </span>
-            </div>
-          </div>
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 md:px-5 rounded-2xl admin-glass-subtle">
+              <div className="flex items-center gap-5 flex-wrap">
+                <div>
+                  <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-zinc-500 block">
+                    Apartado Activo
+                  </span>
+                  <span className="text-lg font-black font-display text-white uppercase">
+                    {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'}
+                  </span>
+                </div>
+                <div className="h-7 w-px bg-white/10 hidden sm:block" />
+                <div className="flex items-center gap-4 text-xs font-mono tabular-nums">
+                  <span className="flex items-center gap-2 text-emerald-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    {publishedCount} Publicados
+                  </span>
+                  <span className="flex items-center gap-2 text-zinc-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+                    {draftCount} Borradores (Privados)
+                  </span>
+                </div>
+              </div>
 
-          <div className="flex items-center gap-2.5">
-            {sectionItems.length > 0 && (
-              <button
-                onClick={() => setShowClearSectionModal(true)}
-                className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-red-950/20 hover:bg-red-950/40 border border-red-500/20 text-red-300 hover:text-red-200 text-xs font-mono transition-colors"
-                title={`Eliminar permanentemente todos los elementos de ${activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}`}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Vaciar Categoría</span>
-              </button>
+              <div className="flex items-center gap-2.5">
+                {sectionItems.length > 0 && (
+                  <button
+                    onClick={() => setShowClearSectionModal(true)}
+                    className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-red-500/[0.08] hover:bg-red-500/[0.16] border border-red-500/20 text-red-300 hover:text-red-200 text-xs font-mono transition-all active:scale-95"
+                    title={`Eliminar permanentemente todos los elementos de ${activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Vaciar Categoría</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    if (showUploadForm) {
+                      setSelectedAudioFile(null);
+                      setSelectedCoverFile(null);
+                      setCoverPreviewUrl('');
+                    }
+                    setShowUploadForm(!showUploadForm);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl admin-btn-primary text-xs font-bold uppercase tracking-wider"
+                >
+                  {showUploadForm ? (
+                    <>
+                      <X className="w-4 h-4" />
+                      <span>Ocultar Formulario</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4" />
+                      <span>Subir a {activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* FORMULARIO DE SUBIDA (Colapsable) */}
+            {showUploadForm && (
+              <div className="p-6 md:p-8 rounded-3xl admin-glass admin-drawer-enter space-y-6">
+                <div className="flex items-center justify-between border-b border-white/[0.07] pb-4">
+                  <div>
+                    <h3 className="text-lg font-black font-display uppercase tracking-wide text-white">
+                      Subir nuevo archivo a{' '}
+                      {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'}
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Archivos de audio originales WAV o MP3 sin recompresión y portada opcional.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowUploadForm(false);
+                      setSelectedAudioFile(null);
+                      setSelectedCoverFile(null);
+                      setCoverPreviewUrl('');
+                    }}
+                    className="p-2 rounded-xl admin-btn-glass text-zinc-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveNewItem} className="space-y-6">
+                  {/* Dropzones de Audio y Portada Opcional */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* 1. Archivo de Audio (Obligatorio) */}
+                    <div className="space-y-2">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-300">
+                        Archivo de Audio (WAV o MP3) *
+                      </label>
+                      <label className="flex flex-col items-center justify-center p-6 rounded-2xl admin-dropzone cursor-pointer group text-center">
+                        <FileAudio className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
+                        {selectedAudioFile ? (
+                          <div className="space-y-1">
+                            <span className="text-xs font-bold text-white block truncate max-w-xs">
+                              {selectedAudioFile.name}
+                            </span>
+                            <span className="text-[11px] font-mono text-emerald-400 tabular-nums">
+                              {(selectedAudioFile.size / (1024 * 1024)).toFixed(2)} MB · Listo para cargar
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-xs font-semibold text-zinc-200">Haz clic o arrastra tu audio</span>
+                            <span className="text-[10px] text-zinc-500 font-mono mt-1">
+                              Formatos admitidos: .wav, .mp3, .aiff
+                            </span>
+                          </>
+                        )}
+                        <input
+                          type="file"
+                          accept="audio/wav,audio/mp3,audio/mpeg,audio/aiff,audio/x-aiff"
+                          onChange={handleAudioFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+
+                    {/* 2. Portada Opcional */}
+                    <div className="space-y-2">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-300">
+                        Portada Visual (Opcional)
+                      </label>
+                      <label className="flex flex-col items-center justify-center p-6 rounded-2xl admin-dropzone cursor-pointer group text-center relative overflow-hidden">
+                        {coverPreviewUrl ? (
+                          <div className="flex items-center gap-3 text-left">
+                            <img
+                              src={coverPreviewUrl}
+                              alt="Preview"
+                              className="w-12 h-12 rounded-xl object-cover border border-white/20"
+                            />
+                            <div>
+                              <span className="text-xs font-bold text-white block truncate max-w-[180px]">
+                                {selectedCoverFile?.name || 'Portada seleccionada'}
+                              </span>
+                              <span className="text-[10px] text-emerald-400 font-mono">Cambiar imagen</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <ImageIcon className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
+                            <span className="text-xs font-semibold text-zinc-200">Subir carátula (PNG o JPG)</span>
+                            <span className="text-[10px] text-zinc-500 font-mono mt-1">
+                              Si se omite, se asigna carátula futurista ANOMALY
+                            </span>
+                          </>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={handleCoverFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Metadatos del sonido */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-2 space-y-1.5">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                        Nombre del Sonido *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. SUB SEISMIC 808"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        required
+                        className="w-full px-4 py-2.5 rounded-xl admin-input text-white placeholder-zinc-600 uppercase font-mono text-sm"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                        Categoría / Género (Opcional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. 808 Bass, Drum Kit (Opcional)"
+                        value={category}
+                        onChange={(e) => setCategory(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-xl admin-input text-white placeholder-zinc-600 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    {activeSection !== 'one_shots' && (
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                          Tempo (BPM)
+                        </label>
+                        <input
+                          type="number"
+                          value={bpm}
+                          onChange={(e) => setBpm(Number(e.target.value))}
+                          className="w-full px-4 py-2.5 rounded-xl admin-input text-white text-xs font-mono tabular-nums"
+                        />
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                        Tonalidad / Key
+                      </label>
+                      <input
+                        type="text"
+                        value={keySignature}
+                        onChange={(e) => setKeySignature(e.target.value)}
+                        placeholder="C Minor / F#"
+                        className="w-full px-4 py-2.5 rounded-xl admin-input text-white text-xs font-mono"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                        Formato de Entrega
+                      </label>
+                      <input
+                        type="text"
+                        value={format}
+                        onChange={(e) => setFormat(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-xl admin-input text-white text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Descripción */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+                      Descripción del Sonido
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder="Detalles de compresión, ecualización analógica o características del sonido..."
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl admin-input text-white placeholder-zinc-600 text-xs leading-relaxed"
+                    />
+                  </div>
+
+                  {/* Precio y Opción de Publicación Inmediata */}
+                  <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-white/[0.07]">
+                    <div className="flex flex-wrap items-center gap-6">
+                      <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-zinc-200">
+                        <input
+                          type="checkbox"
+                          checked={isFree}
+                          onChange={(e) => setIsFree(e.target.checked)}
+                          className="rounded accent-white"
+                        />
+                        <span>Descarga Gratuita (0% Regalías)</span>
+                      </label>
+
+                      {!isFree && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-zinc-400">Precio USD: $</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={price}
+                            onChange={(e) => setPrice(Number(e.target.value))}
+                            className="w-24 px-3 py-1.5 rounded-xl admin-input text-xs font-mono text-white tabular-nums"
+                          />
+                        </div>
+                      )}
+
+                      <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-emerald-300">
+                        <input
+                          type="checkbox"
+                          checked={shouldPublishImmediately}
+                          onChange={(e) => setShouldPublishImmediately(e.target.checked)}
+                          className="rounded accent-emerald-400"
+                        />
+                        <span>Publicar inmediatamente en el catálogo</span>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowUploadForm(false)}
+                        className="px-4 py-2.5 rounded-xl admin-btn-glass text-xs font-mono text-zinc-300 hover:text-white"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isProcessing}
+                        className="px-6 py-2.5 rounded-xl admin-btn-primary font-bold tracking-wider text-xs uppercase flex items-center gap-2 disabled:opacity-50"
+                      >
+                        <UploadCloud className="w-4 h-4" />
+                        <span>
+                          {isProcessing
+                            ? 'Procesando...'
+                            : shouldPublishImmediately
+                            ? 'Guardar y Publicar'
+                            : 'Guardar como Borrador'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
             )}
 
-            <button
-              onClick={() => {
-                if (showUploadForm) {
-                  setSelectedAudioFile(null);
-                  setSelectedCoverFile(null);
-                  setCoverPreviewUrl('');
-                }
-                setShowUploadForm(!showUploadForm);
-              }}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-bold uppercase tracking-wider transition-all shadow-md"
-            >
-              {showUploadForm ? (
-                <>
-                  <X className="w-4 h-4" />
-                  <span>Ocultar Formulario</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="w-4 h-4" />
-                  <span>Subir a {activeSection === 'one_shots' ? 'LIBRERÍAS' : activeSection.toUpperCase()}</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+            {/* TABLA DE ELEMENTOS DE LA SECCIÓN ACTIVA */}
+            <div className="rounded-3xl admin-glass overflow-hidden">
+              <div className="px-6 py-4 border-b border-white/[0.07] flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xs md:text-sm font-bold font-mono uppercase tracking-[0.12em] text-white tabular-nums">
+                  Archivos en {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'} ({sectionItems.length})
+                </h2>
+                <span className="text-[11px] font-mono text-zinc-500">
+                  Usa el conmutador de cada elemento para publicar o despublicar al instante.
+                </span>
+              </div>
 
-        {/* FORMULARIO DE SUBIDA (Colapsable) */}
-        {showUploadForm && (
-          <div className="p-6 md:p-8 rounded-2xl bg-zinc-950/80 backdrop-blur-2xl border border-white/10 shadow-2xl space-y-6">
+              {sectionItems.length === 0 ? (
+                <div className="p-14 text-center text-zinc-500 font-mono text-xs">
+                  No hay archivos en este apartado. Haz clic en el botón superior para subir el primero.
+                </div>
+              ) : (
+                <div className="divide-y divide-white/[0.05]">
+                  {sectionItems.map((item, idx) => {
+                    const isItemPlaying = playingId === item.id;
+
+                    return (
+                      <div
+                        key={item.id}
+                        style={{ animationDelay: `${Math.min(idx * 30, 240)}ms` }}
+                        className="p-4 md:px-6 flex flex-col md:flex-row md:items-center justify-between gap-4 admin-row"
+                      >
+                        {/* Información visual y técnica */}
+                        <div className="flex items-center gap-4 min-w-0">
+                          {/* Portada */}
+                          <div
+                            className={`relative w-12 h-12 rounded-xl overflow-hidden shrink-0 border bg-black transition-all duration-300 ${
+                              isItemPlaying
+                                ? 'border-white/40 shadow-lg shadow-white/10 scale-[1.03]'
+                                : 'border-white/10'
+                            }`}
+                          >
+                            <img
+                              src={item.coverImage || DEFAULT_HERO_IMAGE}
+                              alt={item.title}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+
+                          {/* Botón Preview Play */}
+                          <button
+                            onPointerEnter={() => prefetchAudioForItem(item, getAdminToken() || undefined)}
+                            onTouchStart={() => prefetchAudioForItem(item, getAdminToken() || undefined)}
+                            onClick={() => handleTogglePlay(item)}
+                            className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center transition-all duration-200 ${
+                              isItemPlaying
+                                ? 'bg-white text-zinc-950 shadow-lg shadow-white/20 scale-105'
+                                : 'bg-white/[0.07] hover:bg-white/[0.16] border border-white/10 text-white active:scale-90'
+                            }`}
+                            title={isItemPlaying ? 'Pausar' : 'Escuchar sonido'}
+                          >
+                            {isItemPlaying ? (
+                              <Pause className="w-3.5 h-3.5 fill-current" />
+                            ) : (
+                              <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                            )}
+                          </button>
+
+                          {/* Título y detalles */}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <span className="font-display font-black text-sm text-white tracking-tight truncate">
+                                {item.title}
+                              </span>
+
+                              {/* Indicador de Estado minimalista */}
+                              {item.isPublished ? (
+                                <span className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-wider text-emerald-300">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                  PUBLICADO
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-wider text-zinc-500">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+                                  BORRADOR
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 mt-1 flex-wrap tabular-nums">
+                              <span className="text-zinc-300 font-medium">{item.category}</span>
+                              {item.bpm && <span>· {item.bpm} BPM</span>}
+                              {item.key && <span>· {item.key}</span>}
+                              <span>· {item.format}</span>
+                              <span>· {item.fileSize}</span>
+                              <span className={item.isFree ? 'text-zinc-200' : 'text-white font-semibold'}>
+                                · {item.isFree ? 'Gratis' : `$${item.price}`}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Acciones del Administrador */}
+                        <div className="flex items-center gap-1.5 self-end md:self-center shrink-0">
+                          {/* Botón Publicar / Despublicar */}
+                          <button
+                            onClick={() => handleTogglePublish(item)}
+                            className={`px-3 py-2 rounded-xl text-xs font-mono font-medium transition-all flex items-center gap-1.5 border active:scale-95 ${
+                              item.isPublished
+                                ? 'admin-btn-glass text-zinc-300 hover:border-amber-400/40 hover:text-amber-200'
+                                : 'bg-emerald-500/10 border-emerald-400/30 hover:bg-emerald-500/20 text-emerald-300'
+                            }`}
+                            title={item.isPublished ? 'Hacer privado (no visible al público)' : 'Publicar en la tienda'}
+                          >
+                            {item.isPublished ? (
+                              <>
+                                <EyeOff className="w-3.5 h-3.5" />
+                                <span>Despublicar</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Publicar</span>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Botón Editar Información */}
+                          <button
+                            onClick={() => setEditingItem(item)}
+                            className="p-2 rounded-xl admin-btn-glass text-zinc-300 hover:text-white"
+                            title="Editar información"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Botón Reemplazar Archivo Master o Carátula */}
+                          <button
+                            onClick={() => {
+                              setItemToReplace(item);
+                              setReplaceKind('audio');
+                              setReplacementFile(null);
+                              setReplacementPreview('');
+                            }}
+                            className="p-2 rounded-xl admin-btn-glass text-zinc-300 hover:text-white"
+                            title="Reemplazar archivo master o carátula"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Botón Descarga directa */}
+                          <a
+                            href={`/api/admin/download/item/${item.id}?admin_token=${encodeURIComponent(getAdminToken() || '')}`}
+                            download={`${item.title}_ANOMALY_SOUND.wav`}
+                            className="p-2 rounded-xl admin-btn-glass text-zinc-300 hover:text-white"
+                            title="Descargar archivo original"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </a>
+
+                          {/* Botón Eliminar */}
+                          <button
+                            onClick={() => handleDeleteItem(item)}
+                            className="p-2 rounded-xl bg-red-500/[0.08] hover:bg-red-500/[0.18] border border-red-500/20 text-red-400 hover:text-red-200 transition-all active:scale-95"
+                            title="Eliminar permanentemente"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* INPUT OCULTO PARA SELECCIONAR IMAGEN DEL HERO */}
+      <input
+        ref={heroFileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+        onChange={handleSelectHeroFile}
+        className="hidden"
+      />
+
+      {/* MODAL DE CONFIRMACIÓN Y ENCUADRE PARA CAMBIAR IMAGEN DEL HERO */}
+      {isHeroModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 admin-modal-backdrop">
+          <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6 md:p-8 rounded-3xl admin-glass admin-modal-panel space-y-5 relative">
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-              <div>
-                <h3 className="text-lg font-black font-display uppercase tracking-wide text-white">
-                  Subir nuevo archivo a {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'}
+              <div className="flex items-center gap-3">
+                <span className="p-2 rounded-xl admin-glass-subtle text-white">
+                  <ImageIcon className="w-4 h-4" />
+                </span>
+                <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
+                  Encuadrar y Confirmar Imagen del HERO
                 </h3>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Archivos de audio originales WAV o MP3 sin recompresión y portada opcional.
-                </p>
               </div>
               <button
-                onClick={() => {
-                  setShowUploadForm(false);
-                  setSelectedAudioFile(null);
-                  setSelectedCoverFile(null);
-                  setCoverPreviewUrl('');
-                }}
-                className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white"
+                type="button"
+                disabled={isUpdatingHero}
+                onClick={handleCancelHeroChange}
+                className="p-2 rounded-xl admin-btn-glass text-zinc-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveNewItem} className="space-y-6">
-              {/* Dropzones de Audio y Portada Opcional */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* 1. Archivo de Audio (Obligatorio) */}
-                <div className="space-y-2">
-                  <label className="block text-xs font-mono uppercase text-zinc-300">
-                    Archivo de Audio (WAV o MP3) *
-                  </label>
-                  <label className="flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-white/20 hover:border-white/50 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-pointer group text-center">
-                    <FileAudio className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
-                    {selectedAudioFile ? (
-                      <div className="space-y-1">
-                        <span className="text-xs font-bold text-white block truncate max-w-xs">{selectedAudioFile.name}</span>
-                        <span className="text-[11px] font-mono text-emerald-400">
-                          {(selectedAudioFile.size / (1024 * 1024)).toFixed(2)} MB · Listo para cargar
-                        </span>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-xs font-semibold text-zinc-300">Haz clic o arrastra tu audio</span>
-                        <span className="text-[10px] text-zinc-500 font-mono mt-1">Formatos admitidos: .wav, .mp3, .aiff</span>
-                      </>
-                    )}
-                    <input
-                      type="file"
-                      accept="audio/wav,audio/mp3,audio/mpeg,audio/aiff,audio/x-aiff"
-                      onChange={handleAudioFileChange}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-
-                {/* 2. Portada Opcional */}
-                <div className="space-y-2">
-                  <label className="block text-xs font-mono uppercase text-zinc-300">
-                    Portada Visual (Opcional)
-                  </label>
-                  <label className="flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-white/20 hover:border-white/50 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-pointer group text-center relative overflow-hidden">
-                    {coverPreviewUrl ? (
-                      <div className="flex items-center gap-3 text-left">
-                        <img src={coverPreviewUrl} alt="Preview" className="w-12 h-12 rounded-lg object-cover border border-white/20" />
-                        <div>
-                          <span className="text-xs font-bold text-white block truncate max-w-[180px]">
-                            {selectedCoverFile?.name || 'Portada seleccionada'}
-                          </span>
-                          <span className="text-[10px] text-emerald-400 font-mono">Cambiar imagen</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <ImageIcon className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
-                        <span className="text-xs font-semibold text-zinc-300">Subir carátula (PNG o JPG)</span>
-                        <span className="text-[10px] text-zinc-500 font-mono mt-1">Si se omite, se asigna carátula futurista ANOMALY</span>
-                      </>
-                    )}
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={handleCoverFileChange}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
+            {/* Editor interactivo de encuadre de la nueva imagen */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-[11px] font-mono">
+                <span className="text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
+                  <Move className="w-3.5 h-3.5" />
+                  Arrastra la nueva imagen para encuadrarla detrás del título
+                </span>
+                <span className="text-zinc-400 tabular-nums">
+                  X: {draftHeroFraming.posX}% · Y: {draftHeroFraming.posY}% · {draftHeroFraming.scale.toFixed(2)}x
+                </span>
               </div>
 
-              {/* Metadatos del sonido */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-2 space-y-1.5">
-                  <label className="block text-xs font-mono uppercase text-zinc-400">Nombre del Sonido *</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. SUB SEISMIC 808"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    required
-                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-zinc-600 focus:outline-none focus:border-white/40 uppercase font-mono text-sm"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-mono uppercase text-zinc-400">Categoría / Género (Opcional)</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. 808 Bass, Drum Kit (Opcional)"
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-zinc-600 focus:outline-none focus:border-white/40 text-xs font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {activeSection !== 'one_shots' && (
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-mono uppercase text-zinc-400">Tempo (BPM)</label>
-                    <input
-                      type="number"
-                      value={bpm}
-                      onChange={(e) => setBpm(Number(e.target.value))}
-                      className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white focus:outline-none focus:border-white/40 text-xs font-mono"
-                    />
-                  </div>
-                )}
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-mono uppercase text-zinc-400">Tonalidad / Key</label>
-                  <input
-                    type="text"
-                    value={keySignature}
-                    onChange={(e) => setKeySignature(e.target.value)}
-                    placeholder="C Minor / F#"
-                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white focus:outline-none focus:border-white/40 text-xs font-mono"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-mono uppercase text-zinc-400">Formato de Entrega</label>
-                  <input
-                    type="text"
-                    value={format}
-                    onChange={(e) => setFormat(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white focus:outline-none focus:border-white/40 text-xs font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Descripción */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-mono uppercase text-zinc-400">Descripción del Sonido</label>
-                <textarea
-                  rows={2}
-                  placeholder="Detalles de compresión, ecualización analógica o características del sonido..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-zinc-600 focus:outline-none focus:border-white/40 text-xs leading-relaxed"
+              <div
+                onPointerDown={(e) => handleHeroPointerDown(e, 'modal')}
+                onPointerMove={handleHeroPointerMove}
+                onPointerUp={handleHeroPointerEnd}
+                onPointerCancel={handleHeroPointerEnd}
+                className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden border border-emerald-400/35 bg-[#050505] shadow-lg cursor-grab active:cursor-grabbing select-none touch-none"
+              >
+                <img
+                  src={heroPreviewUrl}
+                  alt="New hero preview"
+                  draggable={false}
+                  className="w-full h-full pointer-events-none"
+                  style={{
+                    objectFit: draftHeroFraming.fit,
+                    objectPosition: `${draftHeroFraming.posX}% ${draftHeroFraming.posY}%`,
+                    transform: draftHeroFraming.scale !== 1 ? `scale(${draftHeroFraming.scale})` : undefined,
+                    transformOrigin: `${draftHeroFraming.posX}% ${draftHeroFraming.posY}%`
+                  }}
                 />
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{
+                    background:
+                      'linear-gradient(90deg, rgba(5,5,5,0.42) 0%, rgba(5,5,5,0.18) 48%, rgba(5,5,5,0.06) 100%), linear-gradient(180deg, rgba(5,5,5,0.22) 0%, rgba(5,5,5,0.04) 45%, rgba(5,5,5,0.42) 100%)'
+                  }}
+                />
+                <div className="absolute inset-0 p-5 md:p-7 flex flex-col justify-center pointer-events-none">
+                  <div className="max-w-xs space-y-0.5">
+                    <span className="text-[9px] font-mono uppercase tracking-widest text-zinc-300 block">
+                      El sonido de
+                    </span>
+                    <span className="text-lg md:text-2xl font-black font-display tracking-tight text-white uppercase leading-none block">
+                      ANOMALY <span className="text-zinc-300 block">SOUND</span>
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              {/* Precio y Opción de Publicación Inmediata */}
-              <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-white/[0.08]">
-                <div className="flex items-center gap-6">
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-mono">
-                    <input
-                      type="checkbox"
-                      checked={isFree}
-                      onChange={(e) => setIsFree(e.target.checked)}
-                      className="rounded accent-white"
-                    />
-                    <span>Descarga Gratuita (0% Regalías)</span>
-                  </label>
-
-                  {!isFree && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-mono text-zinc-400">Precio USD: $</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={price}
-                        onChange={(e) => setPrice(Number(e.target.value))}
-                        className="w-20 px-2 py-1 rounded-lg bg-white/[0.05] border border-white/10 text-xs font-mono text-white"
-                      />
-                    </div>
-                  )}
-
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-emerald-300">
-                    <input
-                      type="checkbox"
-                      checked={shouldPublishImmediately}
-                      onChange={(e) => setShouldPublishImmediately(e.target.checked)}
-                      className="rounded accent-emerald-400"
-                    />
-                    <span>Publicar inmediatamente en el catálogo</span>
-                  </label>
-                </div>
-
-                <div className="flex items-center gap-3">
+              {/* Controles rápidos de encuadre en el modal */}
+              <div className="p-4 rounded-2xl admin-glass-subtle space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDraftHeroFraming((prev) => ({ ...prev, fit: 'cover' }))}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-mono border transition-all ${
+                        draftHeroFraming.fit === 'cover'
+                          ? 'bg-white text-zinc-950 border-white font-bold'
+                          : 'admin-btn-glass text-zinc-300'
+                      }`}
+                    >
+                      Llenar HERO (Cover)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDraftHeroFraming((prev) => ({ ...prev, fit: 'contain', scale: 1, posX: 50, posY: 50 }))}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-mono border transition-all ${
+                        draftHeroFraming.fit === 'contain'
+                          ? 'bg-white text-zinc-950 border-white font-bold'
+                          : 'admin-btn-glass text-zinc-300'
+                      }`}
+                    >
+                      Imagen Completa (Sin Recorte)
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setShowUploadForm(false)}
-                    className="px-4 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 text-xs font-mono text-zinc-400 hover:text-white"
+                    onClick={() => setDraftHeroFraming({ ...DEFAULT_HERO_FRAMING })}
+                    className="px-3 py-1.5 rounded-xl admin-btn-glass text-zinc-300 hover:text-white text-[11px] font-mono"
                   >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isProcessing}
-                    className="px-6 py-2.5 rounded-xl font-bold tracking-wider text-xs uppercase bg-white text-black hover:bg-zinc-200 transition-all shadow-lg flex items-center gap-2 disabled:opacity-50"
-                  >
-                    <UploadCloud className="w-4 h-4" />
-                    <span>{isProcessing ? 'Procesando...' : shouldPublishImmediately ? 'Guardar y Publicar' : 'Guardar como Borrador'}</span>
+                    Centrar
                   </button>
                 </div>
-              </div>
-            </form>
-          </div>
-        )}
 
-        {/* TABLA DE ELEMENTOS DE LA SECCIÓN ACTIVA */}
-        <div className="rounded-2xl bg-zinc-950/40 backdrop-blur-xl border border-white/[0.08] overflow-hidden shadow-2xl">
-          <div className="px-6 py-4 border-b border-white/[0.08] flex items-center justify-between">
-            <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-white">
-              Archivos en {activeSection === 'one_shots' ? 'Librerías' : activeSection === 'beats' ? 'Beats' : 'Samples'} ({sectionItems.length})
-            </h2>
-            <span className="text-[11px] font-mono text-zinc-500">
-              Usa el conmutador de cada elemento para publicar o despublicar al instante.
-            </span>
-          </div>
-
-          {sectionItems.length === 0 ? (
-            <div className="p-12 text-center text-zinc-500 font-mono text-xs">
-              No hay archivos en este apartado. Haz clic en el botón superior para subir el primero.
-            </div>
-          ) : (
-            <div className="divide-y divide-white/[0.05]">
-              {sectionItems.map((item) => {
-                const isItemPlaying = playingId === item.id;
-
-                return (
-                  <div
-                    key={item.id}
-                    className="p-4 md:px-6 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-white/[0.02] transition-colors"
-                  >
-                    {/* Información visual y técnica */}
-                    <div className="flex items-center gap-4 min-w-0">
-                      {/* Portada */}
-                      <div className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black">
-                        <img
-                          src={item.coverImage || DEFAULT_HERO_IMAGE}
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-
-                      {/* Botón Preview Play */}
-                      <button
-                        onClick={() => handleTogglePlay(item)}
-                        className={`w-9 h-9 rounded-full shrink-0 flex items-center justify-center transition-all ${
-                          isItemPlaying
-                            ? 'bg-white text-black shadow-lg scale-105'
-                            : 'bg-white/10 hover:bg-white/20 text-white'
-                        }`}
-                        title={isItemPlaying ? 'Pausar' : 'Escuchar sonido'}
-                      >
-                        {isItemPlaying ? (
-                          <Pause className="w-4 h-4 fill-current" />
-                        ) : (
-                          <Play className="w-4 h-4 fill-current ml-0.5" />
-                        )}
-                      </button>
-
-                      {/* Título y detalles */}
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-display font-black text-sm text-white tracking-tight truncate">
-                            {item.title}
-                          </span>
-
-                          {/* Badge de Estado: Publicado vs Borrador */}
-                          {item.isPublished ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-                              <Eye className="w-3 h-3" />
-                              PUBLICADO
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zinc-700/30 border border-zinc-600/30 text-zinc-400">
-                              <EyeOff className="w-3 h-3" />
-                              BORRADOR
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 mt-1 flex-wrap">
-                          <span className="text-zinc-300 font-semibold">{item.category}</span>
-                          {item.bpm && <span>· {item.bpm} BPM</span>}
-                          {item.key && <span>· {item.key}</span>}
-                          <span>· {item.format}</span>
-                          <span>· {item.fileSize}</span>
-                          <span>· {item.isFree ? 'Gratis' : `$${item.price}`}</span>
-                        </div>
-                      </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                  <div>
+                    <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
+                      <span>Horizontal (X)</span>
+                      <span className="text-white tabular-nums">{draftHeroFraming.posX}%</span>
                     </div>
-
-                    {/* Acciones del Administrador */}
-                    <div className="flex items-center gap-2 self-end md:self-center shrink-0">
-                      {/* Botón Publicar / Despublicar */}
-                      <button
-                        onClick={() => handleTogglePublish(item)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all flex items-center gap-1.5 border ${
-                          item.isPublished
-                            ? 'bg-zinc-900 border-white/10 hover:border-amber-500/50 text-zinc-300 hover:text-amber-300'
-                            : 'bg-emerald-950/30 border-emerald-500/40 hover:bg-emerald-900/40 text-emerald-300'
-                        }`}
-                        title={item.isPublished ? 'Hacer privado (no visible al público)' : 'Publicar en la tienda'}
-                      >
-                        {item.isPublished ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" />
-                            <span>Despublicar</span>
-                          </>
-                        ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Publicar</span>
-                          </>
-                        )}
-                      </button>
-
-                      {/* Botón Editar Información */}
-                      <button
-                        onClick={() => setEditingItem(item)}
-                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
-                        title="Editar información"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* Botón Reemplazar Archivo Master o Carátula */}
-                      <button
-                        onClick={() => {
-                          setItemToReplace(item);
-                          setReplaceKind('audio');
-                          setReplacementFile(null);
-                          setReplacementPreview('');
-                        }}
-                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
-                        title="Reemplazar archivo master o carátula"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* Botón Descarga directa */}
-                      <a
-                        href={`/api/admin/download/item/${item.id}?admin_token=${encodeURIComponent(getAdminToken() || '')}`}
-                        download={`${item.title}_ANOMALY_SOUND.wav`}
-                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white transition-colors"
-                        title="Descargar archivo original"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </a>
-
-                      {/* Botón Eliminar */}
-                      <button
-                        onClick={() => handleDeleteItem(item)}
-                        className="p-2 rounded-lg bg-red-950/20 hover:bg-red-900/40 border border-red-500/20 text-red-400 hover:text-red-200 transition-colors"
-                        title="Eliminar permanentemente"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={0.5}
+                      value={draftHeroFraming.posX}
+                      onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, posX: Number(e.target.value) }))}
+                      className="admin-range"
+                    />
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    )}
-  </main>
-
-  {/* INPUT OCULTO PARA SELECCIONAR IMAGEN DEL HERO */}
-  <input
-    ref={heroFileInputRef}
-    type="file"
-    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-    onChange={handleSelectHeroFile}
-    className="hidden"
-  />
-
-  {/* MODAL DE CONFIRMACIÓN Y ENCUADRE PARA CAMBIAR IMAGEN DEL HERO */}
-  {isHeroModalOpen && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6 md:p-8 rounded-2xl bg-[#09090b] border border-white/15 shadow-2xl space-y-5 relative">
-        <div className="flex items-center justify-between border-b border-white/10 pb-4">
-          <div className="flex items-center gap-2.5">
-            <span className="p-2 rounded-lg bg-white/10 text-white">
-              <ImageIcon className="w-4 h-4" />
-            </span>
-            <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
-              Encuadrar y Confirmar Imagen del HERO
-            </h3>
-          </div>
-          <button
-            type="button"
-            disabled={isUpdatingHero}
-            onClick={handleCancelHeroChange}
-            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Editor interactivo de encuadre de la nueva imagen */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between text-[11px] font-mono">
-            <span className="text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
-              <Move className="w-3.5 h-3.5" />
-              Arrastra la nueva imagen para encuadrarla detrás del título
-            </span>
-            <span className="text-zinc-400">
-              X: {draftHeroFraming.posX}% · Y: {draftHeroFraming.posY}% · {draftHeroFraming.scale.toFixed(2)}x
-            </span>
-          </div>
-
-          <div
-            onPointerDown={(e) => handleHeroPointerDown(e, 'modal')}
-            onPointerMove={handleHeroPointerMove}
-            onPointerUp={handleHeroPointerEnd}
-            onPointerCancel={handleHeroPointerEnd}
-            className="relative aspect-[16/9] w-full rounded-xl overflow-hidden border border-emerald-500/40 bg-[#050505] shadow-lg shadow-emerald-950/20 cursor-grab active:cursor-grabbing select-none touch-none"
-          >
-            <img
-              src={heroPreviewUrl}
-              alt="New hero preview"
-              draggable={false}
-              className="w-full h-full pointer-events-none"
-              style={{
-                objectFit: draftHeroFraming.fit,
-                objectPosition: `${draftHeroFraming.posX}% ${draftHeroFraming.posY}%`,
-                transform: draftHeroFraming.scale !== 1 ? `scale(${draftHeroFraming.scale})` : undefined,
-                transformOrigin: `${draftHeroFraming.posX}% ${draftHeroFraming.posY}%`
-              }}
-            />
-            <div
-              className="absolute inset-0 pointer-events-none"
-              style={{
-                background:
-                  'linear-gradient(90deg, rgba(5,5,5,0.42) 0%, rgba(5,5,5,0.18) 48%, rgba(5,5,5,0.06) 100%), linear-gradient(180deg, rgba(5,5,5,0.22) 0%, rgba(5,5,5,0.04) 45%, rgba(5,5,5,0.42) 100%)'
-              }}
-            />
-            <div className="absolute inset-0 p-5 md:p-7 flex flex-col justify-center pointer-events-none">
-              <div className="max-w-xs space-y-0.5">
-                <span className="text-[9px] font-mono uppercase tracking-widest text-zinc-300 block">
-                  El sonido de
-                </span>
-                <span className="text-lg md:text-2xl font-black font-display tracking-tight text-white uppercase leading-none block">
-                  ANOMALY <span className="text-zinc-300 block">SOUND</span>
-                </span>
+                  <div>
+                    <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
+                      <span>Vertical (Y)</span>
+                      <span className="text-white tabular-nums">{draftHeroFraming.posY}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={0.5}
+                      value={draftHeroFraming.posY}
+                      onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, posY: Number(e.target.value) }))}
+                      className="admin-range"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
+                      <span>Zoom</span>
+                      <span className="text-white tabular-nums">{draftHeroFraming.scale.toFixed(2)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={2.5}
+                      step={0.05}
+                      value={draftHeroFraming.scale}
+                      onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, scale: Number(e.target.value) }))}
+                      className="admin-range"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Controles rápidos de encuadre en el modal */}
-          <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDraftHeroFraming((prev) => ({ ...prev, fit: 'cover' }))}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors ${
-                    draftHeroFraming.fit === 'cover'
-                      ? 'bg-white text-black border-white font-bold'
-                      : 'bg-white/[0.04] text-zinc-300 border-white/10'
-                  }`}
-                >
-                  Llenar HERO (Cover)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDraftHeroFraming((prev) => ({ ...prev, fit: 'contain', scale: 1, posX: 50, posY: 50 }))}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors ${
-                    draftHeroFraming.fit === 'contain'
-                      ? 'bg-white text-black border-white font-bold'
-                      : 'bg-white/[0.04] text-zinc-300 border-white/10'
-                  }`}
-                >
-                  Imagen Completa (Sin Recorte)
-                </button>
+            {/* Ficha técnica del nuevo archivo */}
+            {selectedHeroFile && (
+              <div className="p-3.5 rounded-2xl admin-glass-subtle text-xs font-mono space-y-1.5 tabular-nums">
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span className="text-zinc-500">Archivo:</span>
+                  <span className="font-bold text-white truncate max-w-[280px]">{selectedHeroFile.name}</span>
+                </div>
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span className="text-zinc-500">Peso:</span>
+                  <span className="text-emerald-400 font-bold">
+                    {(selectedHeroFile.size / (1024 * 1024)).toFixed(2)} MB
+                  </span>
+                </div>
+                {heroDimensions && (
+                  <div className="flex items-center justify-between text-zinc-300">
+                    <span className="text-zinc-500">Resolución:</span>
+                    <span>
+                      {heroDimensions.width} × {heroDimensions.height} px
+                    </span>
+                  </div>
+                )}
               </div>
+            )}
+
+            {/* Mensaje de error si falla */}
+            {heroUpdateError && (
+              <div className="p-3.5 rounded-2xl bg-red-950/35 border border-red-500/30 text-xs text-red-200 flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{heroUpdateError}</span>
+              </div>
+            )}
+
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Al confirmar, la imagen y el encuadre seleccionado se guardarán permanentemente en el HERO público. La imagen anterior se conservará intacta hasta confirmar la subida.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/[0.08]">
               <button
                 type="button"
-                onClick={() => setDraftHeroFraming({ ...DEFAULT_HERO_FRAMING })}
-                className="px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-zinc-300 text-[11px] font-mono"
+                disabled={isUpdatingHero}
+                onClick={handleCancelHeroChange}
+                className="px-4 py-2.5 rounded-xl admin-btn-glass text-xs font-mono font-medium text-zinc-300 hover:text-white"
               >
-                Centrar
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                disabled={isUpdatingHero}
+                onClick={confirmHeroImageChange}
+                className="px-5 py-2.5 rounded-xl admin-btn-primary text-xs font-bold font-mono uppercase tracking-wider flex items-center gap-2 disabled:opacity-50"
+              >
+                {isUpdatingHero ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Subiendo a Supabase Storage...</span>
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span>Confirmar y Aplicar al HERO</span>
+                  </>
+                )}
               </button>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
-                  <span>Horizontal (X)</span>
-                  <span>{draftHeroFraming.posX}%</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={0.5}
-                  value={draftHeroFraming.posX}
-                  onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, posX: Number(e.target.value) }))}
-                  className="w-full accent-white cursor-pointer"
-                />
-              </div>
-              <div>
-                <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
-                  <span>Vertical (Y)</span>
-                  <span>{draftHeroFraming.posY}%</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={0.5}
-                  value={draftHeroFraming.posY}
-                  onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, posY: Number(e.target.value) }))}
-                  className="w-full accent-white cursor-pointer"
-                />
-              </div>
-              <div>
-                <div className="flex justify-between text-[10px] font-mono text-zinc-400 mb-1">
-                  <span>Zoom</span>
-                  <span>{draftHeroFraming.scale.toFixed(2)}x</span>
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={2.5}
-                  step={0.05}
-                  value={draftHeroFraming.scale}
-                  onChange={(e) => setDraftHeroFraming((prev) => ({ ...prev, scale: Number(e.target.value) }))}
-                  className="w-full accent-white cursor-pointer"
-                />
-              </div>
-            </div>
           </div>
         </div>
-
-        {/* Ficha técnica del nuevo archivo */}
-        {selectedHeroFile && (
-          <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs font-mono space-y-1">
-            <div className="flex items-center justify-between text-zinc-300">
-              <span className="text-zinc-500">Archivo:</span>
-              <span className="font-bold text-white truncate max-w-[280px]">{selectedHeroFile.name}</span>
-            </div>
-            <div className="flex items-center justify-between text-zinc-300">
-              <span className="text-zinc-500">Peso:</span>
-              <span className="text-emerald-400 font-bold">{(selectedHeroFile.size / (1024 * 1024)).toFixed(2)} MB</span>
-            </div>
-            {heroDimensions && (
-              <div className="flex items-center justify-between text-zinc-300">
-                <span className="text-zinc-500">Resolución:</span>
-                <span>{heroDimensions.width} × {heroDimensions.height} px</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Mensaje de error si falla */}
-        {heroUpdateError && (
-          <div className="p-3.5 rounded-xl bg-red-950/30 border border-red-500/30 text-xs text-red-200 flex items-center gap-2.5">
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-            <span>{heroUpdateError}</span>
-          </div>
-        )}
-
-        <p className="text-xs text-zinc-400 leading-relaxed">
-          Al confirmar, la imagen y el encuadre seleccionado se guardarán permanentemente en el HERO público. La imagen anterior se conservará intacta hasta confirmar la subida.
-        </p>
-
-        <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/10">
-          <button
-            type="button"
-            disabled={isUpdatingHero}
-            onClick={handleCancelHeroChange}
-            className="px-4 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 text-xs font-mono font-medium text-zinc-300 hover:text-white transition-colors"
-          >
-            Cancelar
-          </button>
-
-          <button
-            type="button"
-            disabled={isUpdatingHero}
-            onClick={confirmHeroImageChange}
-            className="px-5 py-2.5 rounded-xl bg-white text-black hover:bg-zinc-200 text-xs font-bold font-mono uppercase tracking-wider transition-all shadow-lg flex items-center gap-2 disabled:opacity-50"
-          >
-            {isUpdatingHero ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Subiendo a Supabase Storage...</span>
-              </>
-            ) : (
-              <>
-                <UploadCloud className="w-3.5 h-3.5" />
-                <span>Confirmar y Aplicar al HERO</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
-  )}
+      )}
 
       {/* MODAL DE EDICIÓN DE ELEMENTO */}
       {editingItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="w-full max-w-lg p-6 rounded-2xl bg-zinc-950 border border-white/20 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 admin-modal-backdrop">
+          <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 md:p-7 rounded-3xl admin-glass admin-modal-panel space-y-5">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3.5">
               <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
                 Editar {editingItem.title}
               </h3>
               <button
                 onClick={() => setEditingItem(null)}
-                className="p-1 rounded-lg text-zinc-400 hover:text-white"
+                className="p-2 rounded-xl admin-btn-glass text-zinc-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2078,45 +2176,53 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
             <form onSubmit={handleSaveEditedItem} className="space-y-4">
               <div>
-                <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Nombre</label>
+                <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Nombre
+                </label>
                 <input
                   type="text"
                   value={editingItem.title}
                   onChange={(e) => setEditingItem({ ...editingItem, title: e.target.value })}
                   required
-                  className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white uppercase font-mono text-xs focus:outline-none focus:border-white/40"
+                  className="w-full px-3.5 py-2.5 rounded-xl admin-input text-white uppercase font-mono text-xs"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Categoría</label>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                    Categoría
+                  </label>
                   <input
                     type="text"
                     value={editingItem.category}
                     onChange={(e) => setEditingItem({ ...editingItem, category: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                    className="w-full px-3.5 py-2.5 rounded-xl admin-input text-white font-mono text-xs"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Key / Tono</label>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                    Key / Tono
+                  </label>
                   <input
                     type="text"
                     value={editingItem.key || ''}
                     onChange={(e) => setEditingItem({ ...editingItem, key: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                    className="w-full px-3.5 py-2.5 rounded-xl admin-input text-white font-mono text-xs"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Sección del Catálogo</label>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                    Sección del Catálogo
+                  </label>
                   <select
                     value={editingItem.section}
                     onChange={(e) => setEditingItem({ ...editingItem, section: e.target.value as CatalogSection })}
-                    className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#121216] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/35"
                   >
                     <option value="one_shots">Librerías (One-Shots)</option>
                     <option value="beats">Beats</option>
@@ -2125,41 +2231,47 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Formato de Entrega</label>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                    Formato de Entrega
+                  </label>
                   <input
                     type="text"
                     value={editingItem.format || 'MP3 320kbps'}
                     onChange={(e) => setEditingItem({ ...editingItem, format: e.target.value })}
                     placeholder="Ej. MP3 320kbps, WAV 24-bit"
-                    className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                    className="w-full px-3.5 py-2.5 rounded-xl admin-input text-white font-mono text-xs"
                   />
                 </div>
               </div>
 
               {editingItem.section !== 'one_shots' && (
                 <div>
-                  <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Tempo (BPM)</label>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                    Tempo (BPM)
+                  </label>
                   <input
                     type="number"
                     value={editingItem.bpm || 140}
                     onChange={(e) => setEditingItem({ ...editingItem, bpm: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                    className="w-full px-3.5 py-2.5 rounded-xl admin-input text-white font-mono text-xs tabular-nums"
                   />
                 </div>
               )}
 
               <div>
-                <label className="block text-xs font-mono uppercase text-zinc-400 mb-1">Descripción</label>
+                <label className="block text-[11px] font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Descripción
+                </label>
                 <textarea
                   rows={2}
                   value={editingItem.description || ''}
                   onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-white text-xs focus:outline-none focus:border-white/40"
+                  className="w-full px-3.5 py-2.5 rounded-xl admin-input text-white text-xs"
                 />
               </div>
 
               {/* Ajuste de Precio y Descarga Gratuita */}
-              <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.08] space-y-3">
+              <div className="p-4 rounded-2xl admin-glass-subtle space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-zinc-200">
                     <input
@@ -2179,7 +2291,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   </label>
 
                   {editingItem.isFree && (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/25 text-emerald-300">
                       Gratis
                     </span>
                   )}
@@ -2202,7 +2314,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                           price: isNaN(val) ? 0 : val
                         });
                       }}
-                      className="w-28 px-3 py-1.5 rounded-xl bg-white/[0.05] border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/40"
+                      className="w-28 px-3 py-1.5 rounded-xl admin-input text-white font-mono text-xs tabular-nums"
                       placeholder="19.99"
                     />
                     <button
@@ -2216,8 +2328,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 )}
               </div>
 
-              <div className="flex items-center justify-between pt-2">
-                <label className="flex items-center gap-2 cursor-pointer text-xs font-mono">
+              <div className="flex items-center justify-between pt-3 border-t border-white/[0.08]">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-zinc-200">
                   <input
                     type="checkbox"
                     checked={editingItem.isPublished}
@@ -2231,14 +2343,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   <button
                     type="button"
                     onClick={() => setEditingItem(null)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-mono text-zinc-400 hover:text-white"
+                    className="px-3.5 py-2 rounded-xl admin-btn-glass text-xs font-mono text-zinc-300 hover:text-white"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
                     disabled={isProcessing}
-                    className="px-4 py-1.5 rounded-lg bg-white text-black text-xs font-bold uppercase tracking-wider hover:bg-zinc-200"
+                    className="px-4 py-2 rounded-xl admin-btn-primary text-xs font-bold uppercase tracking-wider disabled:opacity-50"
                   >
                     Guardar Cambios
                   </button>
@@ -2251,10 +2363,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
       {/* MODAL DE REEMPLAZO ATÓMICO DE ARCHIVO (MASTER O PORTADA) */}
       {itemToReplace && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-lg p-6 rounded-2xl bg-[#09090b] border border-white/20 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 admin-modal-backdrop">
+          <div className="w-full max-w-lg p-6 md:p-7 rounded-3xl admin-glass admin-modal-panel space-y-5">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3.5">
+              <div className="flex items-center gap-2.5">
                 <RefreshCw className="w-4 h-4 text-emerald-400" />
                 <h3 className="text-base font-black font-display uppercase tracking-wider text-white">
                   Reemplazar Archivo · {itemToReplace.title}
@@ -2266,18 +2378,18 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                   setReplacementFile(null);
                   setReplacementPreview('');
                 }}
-                className="p-1 rounded-lg text-zinc-400 hover:text-white"
+                className="p-2 rounded-xl admin-btn-glass text-zinc-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-xs text-zinc-400">
+            <p className="text-xs text-zinc-400 leading-relaxed">
               Reemplaza el master de audio o la carátula preservando el ID, precio, metadatos y enlaces del producto sin romper referencias.
             </p>
 
             <form onSubmit={handleConfirmReplace} className="space-y-4">
-              <div className="flex items-center gap-3 p-1 rounded-xl bg-white/[0.04] border border-white/10">
+              <div className="flex items-center gap-1.5 p-1 rounded-2xl admin-glass-subtle">
                 <button
                   type="button"
                   onClick={() => {
@@ -2285,8 +2397,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     setReplacementFile(null);
                     setReplacementPreview('');
                   }}
-                  className={`flex-1 py-2 text-xs font-mono uppercase font-bold rounded-lg transition-all ${
-                    replaceKind === 'audio' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+                  className={`flex-1 py-2 text-xs font-mono uppercase font-bold rounded-xl transition-all ${
+                    replaceKind === 'audio' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
                   }`}
                 >
                   Audio Master (WAV, AIFF, MP3, ZIP)
@@ -2298,8 +2410,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     setReplacementFile(null);
                     setReplacementPreview('');
                   }}
-                  className={`flex-1 py-2 text-xs font-mono uppercase font-bold rounded-lg transition-all ${
-                    replaceKind === 'cover' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+                  className={`flex-1 py-2 text-xs font-mono uppercase font-bold rounded-xl transition-all ${
+                    replaceKind === 'cover' ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
                   }`}
                 >
                   Carátula (PNG, JPG, WEBP)
@@ -2307,7 +2419,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               </div>
 
               {/* Selector de archivo */}
-              <label className="flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-white/20 hover:border-white/50 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-pointer group text-center">
+              <label className="flex flex-col items-center justify-center p-6 rounded-2xl admin-dropzone cursor-pointer group text-center">
                 {replaceKind === 'audio' ? (
                   <FileAudio className="w-8 h-8 text-zinc-400 group-hover:text-white mb-2 transition-colors" />
                 ) : (
@@ -2316,14 +2428,16 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
                 {replacementFile ? (
                   <div className="space-y-1">
-                    <span className="text-xs font-bold text-white block truncate max-w-xs">{replacementFile.name}</span>
-                    <span className="text-[11px] font-mono text-emerald-400">
+                    <span className="text-xs font-bold text-white block truncate max-w-xs">
+                      {replacementFile.name}
+                    </span>
+                    <span className="text-[11px] font-mono text-emerald-400 tabular-nums">
                       {(replacementFile.size / (1024 * 1024)).toFixed(2)} MB · Seleccionado
                     </span>
                   </div>
                 ) : (
                   <>
-                    <span className="text-xs font-semibold text-zinc-300">
+                    <span className="text-xs font-semibold text-zinc-200">
                       Selecciona el nuevo archivo {replaceKind === 'audio' ? 'de audio' : 'de imagen'}
                     </span>
                     <span className="text-[10px] text-zinc-500 font-mono mt-1">
@@ -2348,13 +2462,13 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               </label>
 
               {replaceKind === 'cover' && replacementPreview && (
-                <div className="flex items-center gap-3 p-2 rounded-xl bg-white/[0.03] border border-white/10">
-                  <img src={replacementPreview} alt="Preview" className="w-12 h-12 rounded-lg object-cover" />
+                <div className="flex items-center gap-3 p-2.5 rounded-2xl admin-glass-subtle">
+                  <img src={replacementPreview} alt="Preview" className="w-12 h-12 rounded-xl object-cover" />
                   <span className="text-xs font-mono text-zinc-300 truncate">Vista previa de la nueva portada</span>
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/[0.08]">
                 <button
                   type="button"
                   disabled={isReplacing}
@@ -2363,14 +2477,14 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                     setReplacementFile(null);
                     setReplacementPreview('');
                   }}
-                  className="px-4 py-2 rounded-xl text-xs font-mono text-zinc-400 hover:text-white"
+                  className="px-4 py-2 rounded-xl admin-btn-glass text-xs font-mono text-zinc-300 hover:text-white"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isReplacing || !replacementFile}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold font-mono uppercase tracking-wider transition-all disabled:opacity-40 flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-zinc-950 text-xs font-bold font-mono uppercase tracking-wider transition-all active:scale-95 disabled:opacity-40 flex items-center gap-2"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isReplacing ? 'animate-spin' : ''}`} />
                   <span>{isReplacing ? 'Reemplazando...' : 'Confirmar Reemplazo'}</span>
@@ -2383,9 +2497,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
       {/* MODAL DE CONFIRMACIÓN DE ELIMINACIÓN PERMANENTE */}
       {itemToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-md p-6 md:p-7 rounded-2xl bg-[#09090b] border border-red-500/30 shadow-2xl shadow-red-950/40 space-y-5 relative">
-            <div className="w-12 h-12 rounded-2xl bg-red-950/40 border border-red-500/30 flex items-center justify-center text-red-400">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 admin-modal-backdrop">
+          <div className="w-full max-w-md p-6 md:p-7 rounded-3xl admin-glass admin-modal-panel border-red-500/25 space-y-5 relative">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/25 flex items-center justify-center text-red-400">
               <AlertCircle className="w-6 h-6" />
             </div>
 
@@ -2399,8 +2513,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
             </div>
 
             {/* Ficha técnica del archivo a eliminar */}
-            <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white/10 bg-black">
+            <div className="p-3.5 rounded-2xl admin-glass-subtle flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black">
                 <img
                   src={itemToDelete.coverImage || '/assets/aistudio/HERO_ca1bd082.jpg'}
                   alt={itemToDelete.title}
@@ -2411,7 +2525,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 <span className="font-display font-black text-xs text-white uppercase block truncate">
                   {itemToDelete.title}
                 </span>
-                <span className="text-[11px] font-mono text-zinc-400 block mt-0.5">
+                <span className="text-[11px] font-mono text-zinc-400 block mt-0.5 tabular-nums">
                   {itemToDelete.category} · {itemToDelete.format} · {itemToDelete.fileSize}
                 </span>
               </div>
@@ -2422,7 +2536,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 type="button"
                 disabled={isDeleting}
                 onClick={() => setItemToDelete(null)}
-                className="px-4 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 text-xs font-mono font-medium text-zinc-300 hover:text-white transition-colors"
+                className="px-4 py-2.5 rounded-xl admin-btn-glass text-xs font-mono font-medium text-zinc-300 hover:text-white"
               >
                 Cancelar
               </button>
@@ -2430,7 +2544,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 type="button"
                 disabled={isDeleting}
                 onClick={confirmDeleteItem}
-                className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold font-mono uppercase tracking-wider transition-all shadow-lg shadow-red-900/40 flex items-center gap-2 disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold font-mono uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-red-950/50 flex items-center gap-2 disabled:opacity-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>{isDeleting ? 'Eliminando...' : 'Eliminar permanentemente'}</span>
@@ -2442,9 +2556,9 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
 
       {/* MODAL DE CONFIRMACIÓN PARA VACIAR SECCIÓN COMPLETA */}
       {showClearSectionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-md p-6 md:p-7 rounded-2xl bg-[#09090b] border border-red-500/30 shadow-2xl shadow-red-950/40 space-y-5 relative">
-            <div className="w-12 h-12 rounded-2xl bg-red-950/40 border border-red-500/30 flex items-center justify-center text-red-400">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 admin-modal-backdrop">
+          <div className="w-full max-w-md p-6 md:p-7 rounded-3xl admin-glass admin-modal-panel border-red-500/25 space-y-5 relative">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/25 flex items-center justify-center text-red-400">
               <Trash2 className="w-6 h-6" />
             </div>
 
@@ -2457,7 +2571,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
               </p>
             </div>
 
-            <div className="p-3 rounded-xl bg-red-950/20 border border-red-500/20 text-xs text-red-300 font-mono">
+            <div className="p-3.5 rounded-2xl bg-red-950/25 border border-red-500/25 text-xs text-red-200 font-mono leading-relaxed">
               Se eliminarán {sectionItems.length} archivos de audio y registros. Tu catálogo quedará limpio para que subas tu propio contenido sin que se vuelvan a cargar los sonidos de prueba.
             </div>
 
@@ -2466,7 +2580,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 type="button"
                 disabled={isDeleting}
                 onClick={() => setShowClearSectionModal(false)}
-                className="px-4 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/10 text-xs font-mono font-medium text-zinc-300 hover:text-white transition-colors"
+                className="px-4 py-2.5 rounded-xl admin-btn-glass text-xs font-mono font-medium text-zinc-300 hover:text-white"
               >
                 Cancelar
               </button>
@@ -2474,7 +2588,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({
                 type="button"
                 disabled={isDeleting}
                 onClick={confirmClearSection}
-                className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold font-mono uppercase tracking-wider transition-all shadow-lg shadow-red-900/40 flex items-center gap-2 disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold font-mono uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-red-950/50 flex items-center gap-2 disabled:opacity-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>{isDeleting ? 'Eliminando...' : 'Eliminar todos'}</span>

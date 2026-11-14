@@ -15,10 +15,10 @@ import {
   saveLead
 } from './utils/storage';
 import {
-  getAudioContext,
-  playBuffer,
+  FastPlaybackController,
+  playItemFast,
+  prefetchAudioForItem,
   stopCurrentAudio,
-  getAudioBufferForItem,
   setMasterVolume
 } from './utils/audioEngine';
 import { smoothScrollEngine } from './utils/smoothScroll';
@@ -113,11 +113,14 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackProgress, setPlaybackProgress] = useState(0);
+  const [playingDuration, setPlayingDuration] = useState(0);
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [lastVolume, setLastVolume] = useState(80);
 
   const getTimeRef = useRef<(() => number) | null>(null);
+  const activeControllerRef = useRef<FastPlaybackController | null>(null);
+  const playRequestIdRef = useRef(0);
   const animFrameRef = useRef<number | null>(null);
   const heroCtaRef = useRef<HTMLButtonElement | null>(null);
   const headerScrolledRef = useRef(false);
@@ -202,10 +205,11 @@ export default function App() {
       const updateLoop = () => {
         if (getTimeRef.current && currentPlayingItem) {
           const raw = getTimeRef.current();
-          const dur = currentPlayingItem.duration || 4.0;
-          const currentT = raw % dur;
+          const controllerDur = activeControllerRef.current?.getDuration() || 0;
+          const dur = controllerDur > 0 ? controllerDur : (playingDuration || currentPlayingItem.duration || 4.0);
+          const currentT = dur > 0 ? (raw % dur) : raw;
           setPlaybackTime(currentT);
-          setPlaybackProgress(currentT / dur);
+          setPlaybackProgress(dur > 0 ? currentT / dur : 0);
         }
         animFrameRef.current = requestAnimationFrame(updateLoop);
       };
@@ -216,30 +220,76 @@ export default function App() {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isPlaying, currentPlayingItem]);
+  }, [isPlaying, currentPlayingItem, playingDuration]);
 
-  // Manejo de reproducción de audio auténtico
+  // Manejo de reproducción instantánea de audio auténtico
   async function handlePlayItem(item: SoundItem) {
     if (currentPlayingItem?.id === item.id && isPlaying) {
-      stopCurrentAudio();
+      activeControllerRef.current?.pause();
       setIsPlaying(false);
       return;
     }
 
+    if (currentPlayingItem?.id === item.id && !isPlaying && activeControllerRef.current) {
+      try {
+        setIsPlaying(true);
+        setPlayerVisible(true);
+        await activeControllerRef.current.resume();
+        return;
+      } catch {
+        // Fallback a recarga limpia si falló reanudación
+      }
+    }
+
+    const reqId = ++playRequestIdRef.current;
+    setCurrentPlayingItem(item);
+    setPlayingDuration(item.duration || 0);
+    setPlaybackTime(0);
+    setPlaybackProgress(0);
+    setPlayerVisible(true);
+    setIsPlaying(true);
+    setPlaybackError(null);
+
     try {
-      getAudioContext();
-      const buffer = await getAudioBufferForItem(item);
-      const audioController = playBuffer(buffer, 0, 1.0, true, () => {
-        setIsPlaying(false);
+      const audioController = await playItemFast(item, {
+        loop: true,
+        restart: true,
+        onDuration: (dur) => {
+          if (reqId === playRequestIdRef.current && dur > 0) {
+            setPlayingDuration(dur);
+          }
+        },
+        onEnded: () => {
+          if (reqId === playRequestIdRef.current) {
+            setIsPlaying(false);
+          }
+        },
+        onError: (err) => {
+          if (reqId !== playRequestIdRef.current) return;
+          setIsPlaying(false);
+          setPlaybackError(`No se pudo reproducir "${item.title}": ${err.message || 'Archivo de audio no disponible.'}`);
+          setTimeout(() => setPlaybackError(null), 5000);
+        }
       });
+
+      if (reqId !== playRequestIdRef.current) {
+        audioController.stop();
+        return;
+      }
+
+      activeControllerRef.current = audioController;
       getTimeRef.current = audioController.getPlaybackTime;
-      setCurrentPlayingItem(item);
-      setPlayerVisible(true);
-      setIsPlaying(true);
-      setPlaybackError(null);
+      const detectedDur = audioController.getDuration();
+      if (detectedDur > 0) {
+        setPlayingDuration(detectedDur);
+      }
     } catch (err: any) {
+      if (err?.name === 'AbortError' || reqId !== playRequestIdRef.current) {
+        return;
+      }
       console.warn('Audio playback error:', err);
       stopCurrentAudio();
+      activeControllerRef.current = null;
       setIsPlaying(false);
       setPlaybackError(`No se pudo reproducir "${item.title}": ${err?.message || 'Archivo de audio no disponible.'}`);
       setTimeout(() => setPlaybackError(null), 5000);
@@ -249,7 +299,7 @@ export default function App() {
   function handleTogglePlayPause() {
     if (!currentPlayingItem) return;
     if (isPlaying) {
-      stopCurrentAudio();
+      activeControllerRef.current?.pause();
       setIsPlaying(false);
     } else {
       handlePlayItem(currentPlayingItem);
@@ -257,6 +307,9 @@ export default function App() {
   }
 
   function handleClosePlayer() {
+    playRequestIdRef.current++;
+    activeControllerRef.current?.stop();
+    activeControllerRef.current = null;
     stopCurrentAudio();
     setIsPlaying(false);
     setPlayerVisible(false);
@@ -571,9 +624,9 @@ export default function App() {
 
               return (
                 <article key={item.id} className="catalog-card reveal">
-                  <div className="space-y-4">
+                  <div className="catalog-card-top">
                     {/* Artwork sin etiquetas técnicas */}
-                    <div className="catalog-art">
+                    <div className={`catalog-art ${isCurrentPlaying ? 'is-playing' : ''}`}>
                       <img
                         src={item.coverImage || DEFAULT_HERO_IMAGE}
                         alt={item.title}
@@ -586,14 +639,14 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="space-y-2 text-center">
+                    <div className="catalog-info">
                       <h3 className="wide font-black text-xl tracking-tight text-white uppercase font-display">
                         {item.title}
                       </h3>
 
                       {/* Solo tempo y nota musical cuando tengan un valor real */}
                       {(hasBpm || hasKey) && (
-                        <ul className="kit-facts justify-center">
+                        <ul className="kit-facts">
                           {hasBpm && <li>{item.bpm} BPM</li>}
                           {hasKey && <li>Key {item.key}</li>}
                         </ul>
@@ -602,9 +655,12 @@ export default function App() {
                   </div>
 
                   {/* Acciones: Preview y Descarga / Compra */}
-                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-center flex-wrap gap-3">
+                  <div className="catalog-actions">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
+                      onPointerEnter={() => prefetchAudioForItem(item)}
+                      onTouchStart={() => prefetchAudioForItem(item)}
+                      onFocus={() => prefetchAudioForItem(item)}
                       onClick={() => handlePlayItem(item)}
                       aria-label={`Escuchar ${item.title}`}
                     >
@@ -680,8 +736,8 @@ export default function App() {
 
               return (
                 <article key={beat.id} className="catalog-card reveal">
-                  <div className="space-y-4">
-                    <div className="catalog-art">
+                  <div className="catalog-card-top">
+                    <div className={`catalog-art ${isCurrentPlaying ? 'is-playing' : ''}`}>
                       <img
                         src={beat.coverImage || DEFAULT_HERO_IMAGE}
                         alt={beat.title}
@@ -694,14 +750,14 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="space-y-2 text-center">
+                    <div className="catalog-info">
                       <h3 className="wide font-black text-xl tracking-tight text-white uppercase font-display">
                         {beat.title}
                       </h3>
 
                       {/* Solo tempo y nota musical cuando tengan un valor real */}
                       {(hasBpm || hasKey) && (
-                        <ul className="kit-facts justify-center">
+                        <ul className="kit-facts">
                           {hasBpm && <li>{beat.bpm} BPM</li>}
                           {hasKey && <li>Key {beat.key}</li>}
                         </ul>
@@ -709,9 +765,12 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-center flex-wrap gap-3">
+                  <div className="catalog-actions">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
+                      onPointerEnter={() => prefetchAudioForItem(beat)}
+                      onTouchStart={() => prefetchAudioForItem(beat)}
+                      onFocus={() => prefetchAudioForItem(beat)}
                       onClick={() => handlePlayItem(beat)}
                       aria-label={`Escuchar ${beat.title}`}
                     >
@@ -787,8 +846,8 @@ export default function App() {
 
               return (
                 <article key={sample.id} className="catalog-card reveal">
-                  <div className="space-y-4">
-                    <div className="catalog-art">
+                  <div className="catalog-card-top">
+                    <div className={`catalog-art ${isCurrentPlaying ? 'is-playing' : ''}`}>
                       <img
                         src={sample.coverImage || DEFAULT_HERO_IMAGE}
                         alt={sample.title}
@@ -801,14 +860,14 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="space-y-2 text-center">
+                    <div className="catalog-info">
                       <h3 className="wide font-black text-xl tracking-tight text-white uppercase font-display">
                         {sample.title}
                       </h3>
 
                       {/* Solo tempo y nota musical cuando tengan un valor real */}
                       {(hasBpm || hasKey) && (
-                        <ul className="kit-facts justify-center">
+                        <ul className="kit-facts">
                           {hasBpm && <li>{sample.bpm} BPM</li>}
                           {hasKey && <li>Key {sample.key}</li>}
                         </ul>
@@ -816,9 +875,12 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-white/[0.08] flex items-center justify-center flex-wrap gap-3">
+                  <div className="catalog-actions">
                     <button
                       className={`play ${isCurrentPlaying ? 'playing' : ''}`}
+                      onPointerEnter={() => prefetchAudioForItem(sample)}
+                      onTouchStart={() => prefetchAudioForItem(sample)}
+                      onFocus={() => prefetchAudioForItem(sample)}
                       onClick={() => handlePlayItem(sample)}
                       aria-label={`Escuchar ${sample.title}`}
                     >
@@ -897,7 +959,7 @@ export default function App() {
           <div className="player-top">
             <span className="player-name" id="playerName">{currentPlayingItem?.title || 'Preview'}</span>
             <span className="player-time" id="playerTime">
-              {formatTime(playbackTime)} / {formatTime(currentPlayingItem?.duration || 0)}
+              {formatTime(playbackTime)} / {formatTime(playingDuration || currentPlayingItem?.duration || 0)}
             </span>
           </div>
           <div
@@ -912,6 +974,11 @@ export default function App() {
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               const p = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              activeControllerRef.current?.seek(p);
+              const totalDur = playingDuration || currentPlayingItem?.duration || 0;
+              if (totalDur > 0) {
+                setPlaybackTime(p * totalDur);
+              }
               setPlaybackProgress(p);
             }}
           >

@@ -17,13 +17,13 @@ class SmoothScrollEngine {
   private rafId: number | null = null;
   private lastFrameTime = 0;
   private mode: AnimationMode = 'idle';
-  private activeLambda = 11;
+  private activeLambda = 9;
 
   // Anchor ease-in-out state
   private anchorStartY = 0;
   private anchorEndY = 0;
   private anchorStartTime = 0;
-  private anchorDuration = 650;
+  private anchorDuration = 750;
 
   // Input device classification state
   private lastWheelTime = 0;
@@ -107,7 +107,7 @@ class SmoothScrollEngine {
     this.lastAppliedY = startY;
     this.anchorStartTime = performance.now();
     // Responsive duration scaled subtly by scroll distance (480ms - 820ms)
-    this.anchorDuration = Math.min(820, Math.max(480, 420 + distance * 0.18));
+    this.anchorDuration = Math.min(950, Math.max(600, 550 + distance * 0.15));
 
     this.startRaf();
   }
@@ -209,11 +209,11 @@ class SmoothScrollEngine {
     // Responsive damping constant (higher = faster response, zero sluggishness)
     // Mouse wheel: ~11.5 (silky glide with immediate start)
     // Trackpad: ~24 (instantaneous control, soft micro-polish)
-    this.activeLambda = isLikelyTrackpad ? 24 : 11.5;
+    this.activeLambda = isLikelyTrackpad ? 18 : 9;
 
     const maxScroll = this.getMaxScroll();
     // Subtle step scaling for notched mouse wheels without sacrificing speed
-    const stepMultiplier = isLikelyTrackpad ? 1.0 : 1.08;
+    const stepMultiplier = isLikelyTrackpad ? 1.15 : 1.08;
     this.targetY = Math.max(0, Math.min(maxScroll, this.targetY + dy * stepMultiplier));
 
     this.startRaf();

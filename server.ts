@@ -1051,6 +1051,26 @@ async function startServer() {
     res.status(404).type('text/plain').send('Archivo de subida no encontrado en el servidor.');
   });
 
+  // Caché en memoria de corta duración para streaming instantáneo de previews sin roundtrips repetidos a Supabase
+  interface CachedAudioStreamEntry {
+    isPublished: boolean;
+    storagePath: string | null;
+    audioUrl: string | null;
+    signedUrl: string | null;
+    signedExpiresAt: number;
+    cachedAt: number;
+  }
+  const audioStreamMetaCache = new Map<string, CachedAudioStreamEntry>();
+  const AUDIO_META_CACHE_TTL_MS = 5 * 60 * 1000;
+
+  function invalidateAudioStreamCache(itemId?: string) {
+    if (!itemId) {
+      audioStreamMetaCache.clear();
+      return;
+    }
+    audioStreamMetaCache.delete(itemId);
+  }
+
   // --- ENDPOINT DEDICADO DE STREAMING Y REPRODUCCIÓN DE AUDIO AUTÉNTICO ---
   // Obtiene y reproduce exactamente el archivo de audio subido (Supabase Storage o local)
   // STRICT: Cero audios predeterminados, cero sonido sintético, devuelve error real si no existe
@@ -1067,45 +1087,82 @@ async function startServer() {
       if (!reqToken && req.headers.authorization?.startsWith('Bearer ')) {
         reqToken = req.headers.authorization.split(' ')[1];
       }
+      if (!reqToken && typeof req.query.admin_token === 'string' && req.query.admin_token.trim()) {
+        reqToken = req.query.admin_token.trim();
+      }
       const isAdminCaller = reqToken ? (await verifyAdminSessionToken(reqToken)).valid : false;
 
-      // 1. Buscar en catálogo Supabase o local
-      let item: any = null;
-      if (isSupabaseConfigured()) {
-        try {
-          item = await getSoundItemByIdFromSupabase(rawId);
-        } catch {}
-      }
-      if (!item) {
-        const localItems = readLocalDatabase();
-        item = localItems.find((it) => it.id === rawId || it.audioUrl?.includes(rawId));
+      const now = Date.now();
+      let cached = audioStreamMetaCache.get(rawId);
+      if (cached && now - cached.cachedAt > AUDIO_META_CACHE_TTL_MS) {
+        cached = undefined;
+        audioStreamMetaCache.delete(rawId);
       }
 
-      // 2. Si se localizó el producto en la base de datos:
-      if (item) {
-        const isPublished = item.is_published !== undefined ? Boolean(item.is_published) : (item.isPublished !== false);
-        if (!isPublished && !isAdminCaller) {
+      if (!cached) {
+        // 1. Buscar en catálogo Supabase o local
+        let item: any = null;
+        if (isSupabaseConfigured()) {
+          try {
+            item = await getSoundItemByIdFromSupabase(rawId);
+          } catch {}
+        }
+        if (!item) {
+          const localItems = readLocalDatabase();
+          item = localItems.find((it) => it.id === rawId || it.audioUrl?.includes(rawId));
+        }
+
+        if (item) {
+          const isPublished = item.is_published !== undefined ? Boolean(item.is_published) : (item.isPublished !== false);
+          const storagePath = item.audio_storage_path || item.audioStoragePath || null;
+          const audioUrl = item.audio_url || item.audioUrl || null;
+          cached = {
+            isPublished,
+            storagePath,
+            audioUrl,
+            signedUrl: null,
+            signedExpiresAt: 0,
+            cachedAt: now
+          };
+          audioStreamMetaCache.set(rawId, cached);
+          if (audioStreamMetaCache.size > 300) {
+            const firstKey = audioStreamMetaCache.keys().next().value;
+            if (firstKey) audioStreamMetaCache.delete(firstKey);
+          }
+        }
+      }
+
+      // 2. Si se localizó el producto en la base de datos o caché:
+      if (cached) {
+        if (!cached.isPublished && !isAdminCaller) {
           return res.status(403).json({ error: 'Este elemento no está publicado.' });
         }
 
-        const storagePath = item.audio_storage_path || item.audioStoragePath;
-        const audioUrl = item.audio_url || item.audioUrl;
-
-        // A) Almacenado en Supabase Storage privado
-        if (storagePath && isSupabaseConfigured()) {
-          const signedUrl = await createSignedAudioUrl(storagePath, 1800);
+        // A) Almacenado en Supabase Storage privado (con URL firmada en caché)
+        if (cached.storagePath && isSupabaseConfigured()) {
+          if (cached.signedUrl && cached.signedExpiresAt > now + 60_000) {
+            res.setHeader('Cache-Control', cached.isPublished ? 'public, max-age=300' : 'private, no-store');
+            return res.redirect(cached.signedUrl);
+          }
+          const signedUrl = await createSignedAudioUrl(cached.storagePath, 1800);
           if (signedUrl) {
+            cached.signedUrl = signedUrl;
+            cached.signedExpiresAt = now + 1800 * 1000;
+            res.setHeader('Cache-Control', cached.isPublished ? 'public, max-age=300' : 'private, no-store');
             return res.redirect(signedUrl);
           }
         }
 
         // B) URL externa completa (http/https)
-        if (audioUrl && (audioUrl.startsWith('http://') || audioUrl.startsWith('https://'))) {
-          return res.redirect(audioUrl);
+        if (cached.audioUrl && (cached.audioUrl.startsWith('http://') || cached.audioUrl.startsWith('https://'))) {
+          res.setHeader('Cache-Control', cached.isPublished ? 'public, max-age=300' : 'private, no-store');
+          return res.redirect(cached.audioUrl);
         }
 
         // C) Archivo local en disco
-        const candidateName = audioUrl ? path.basename(audioUrl) : (storagePath ? path.basename(storagePath) : '');
+        const candidateName = cached.audioUrl
+          ? path.basename(cached.audioUrl)
+          : (cached.storagePath ? path.basename(cached.storagePath) : '');
         if (candidateName) {
           const fullLocalPath = path.join(AUDIO_UPLOADS_DIR, candidateName);
           if (fs.existsSync(fullLocalPath) && fs.statSync(fullLocalPath).isFile()) {
@@ -1116,6 +1173,7 @@ async function startServer() {
               : 'application/octet-stream';
             res.setHeader('Content-Type', contentType);
             res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', cached.isPublished ? 'public, max-age=300' : 'private, no-store');
             return res.sendFile(fullLocalPath);
           }
         }
@@ -1126,6 +1184,7 @@ async function startServer() {
         const potentialSupabasePath = rawId.startsWith('masters/') ? rawId : `masters/${path.basename(rawId)}`;
         const signedUrl = await createSignedAudioUrl(potentialSupabasePath, 1800);
         if (signedUrl) {
+          res.setHeader('Cache-Control', 'private, no-store');
           return res.redirect(signedUrl);
         }
       }
@@ -1459,6 +1518,7 @@ async function startServer() {
 
       if (isSupabaseConfigured()) {
         const saved = await upsertSoundItemInSupabase(newItemPayload);
+        invalidateAudioStreamCache(itemId);
         return res.status(201).json({
           success: true,
           item: saved,
@@ -1491,6 +1551,7 @@ async function startServer() {
       };
       localItems.unshift(localItem);
       writeLocalDatabase(localItems);
+      invalidateAudioStreamCache(itemId);
 
       return res.status(201).json({
         success: true,
@@ -1549,6 +1610,7 @@ async function startServer() {
           downloads: existing.downloads || 0,
           description: patch.description !== undefined ? patch.description : existing.description
         });
+        invalidateAudioStreamCache(id);
 
         return res.json({ success: true, item: updated });
       }
@@ -1591,6 +1653,7 @@ async function startServer() {
       };
       items[index] = updatedItem;
       writeLocalDatabase(items);
+      invalidateAudioStreamCache(id);
 
       return res.json({ success: true, item: updatedItem });
     } catch (err: any) {
@@ -1612,6 +1675,7 @@ async function startServer() {
 
         const newStatus = req.body.isPublished !== undefined ? Boolean(req.body.isPublished) : !existing.is_published;
         await upsertSoundItemInSupabase({ id, is_published: newStatus });
+        invalidateAudioStreamCache(id);
 
         return res.json({
           success: true,
@@ -1631,6 +1695,7 @@ async function startServer() {
       items[index].isPublished = newStatus;
       items[index].updatedAt = new Date().toISOString();
       writeLocalDatabase(items);
+      invalidateAudioStreamCache(id);
 
       return res.json({
         success: true,
@@ -1651,6 +1716,7 @@ async function startServer() {
 
       if (isSupabaseConfigured()) {
         await deleteSoundItemFromSupabase(id);
+        invalidateAudioStreamCache(id);
         return res.json({ success: true, id, message: 'Elemento y archivo master eliminados de Supabase.' });
       }
 
@@ -1685,6 +1751,7 @@ async function startServer() {
 
       const filtered = items.filter((it) => it.id !== id);
       writeLocalDatabase(filtered);
+      invalidateAudioStreamCache(id);
 
       return res.json({ success: true, id, message: 'Elemento y archivos eliminados localmente.' });
     } catch (err: any) {
@@ -1726,6 +1793,7 @@ async function startServer() {
           if (!updated) {
             return res.status(500).json({ error: 'No se pudo confirmar la actualización del master en Supabase.' });
           }
+          invalidateAudioStreamCache(id);
 
           if (oldStoragePath && oldStoragePath !== storagePath) {
             const allItems = await getSoundItemsFromSupabase(true);
@@ -1822,6 +1890,7 @@ async function startServer() {
       }
 
       writeLocalDatabase(items);
+      invalidateAudioStreamCache(id);
       return res.json({
         success: true,
         item,
@@ -1847,6 +1916,7 @@ async function startServer() {
         for (const it of toDelete) {
           await deleteSoundItemFromSupabase(it.id);
         }
+        invalidateAudioStreamCache();
         return res.json({
           success: true,
           deletedCount: toDelete.length,
@@ -1869,6 +1939,7 @@ async function startServer() {
 
       items = section === 'all' ? [] : items.filter((it) => it.section !== section);
       writeLocalDatabase(items);
+      invalidateAudioStreamCache();
 
       return res.json({
         success: true,
@@ -1898,6 +1969,7 @@ async function startServer() {
         for (const demoItem of demoItemsToDelete) {
           await deleteSoundItemFromSupabase(demoItem.id);
         }
+        invalidateAudioStreamCache();
 
         return res.json({
           success: true,
@@ -1916,6 +1988,7 @@ async function startServer() {
       const demoIdsSet = new Set(demoItemsToDelete.map((d) => d.id));
       items = items.filter((it) => !demoIdsSet.has(it.id));
       writeLocalDatabase(items);
+      invalidateAudioStreamCache();
 
       return res.json({
         success: true,

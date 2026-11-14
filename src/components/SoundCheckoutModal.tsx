@@ -138,7 +138,7 @@ export const SoundCheckoutModal: React.FC<SoundCheckoutModalProps> = ({
             <img
               src={item.coverImage || '/assets/aistudio/HERO_ca1bd082.jpg'}
               alt={item.title}
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover transition-transform duration-500 hover:scale-105"
             />
           </div>
 
